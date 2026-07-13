@@ -1,0 +1,82 @@
+{
+  "name": "context-ray-vscode",
+  "displayName": "Context Ray",
+  "description": "Effective context diagnostics for Codex, Claude Code, Cursor, Copilot, and Gemini CLI",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "context-ray",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Linters",
+    "Visualization"
+  ],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:contextRay.scan"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "contextRay.scan",
+        "title": "Context Ray: Scan Workspace"
+      },
+      {
+        "command": "contextRay.openReport",
+        "title": "Context Ray: Open HTML Report"
+      }
+    ],
+    "configuration": {
+      "title": "Context Ray",
+      "properties": {
+        "contextRay.agent": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "cursor",
+            "copilot",
+            "gemini"
+          ],
+          "default": "codex",
+          "description": "Agent whose effective repository context should be simulated."
+        },
+        "contextRay.scanOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Rescan after saving a supported instruction or MCP configuration file."
+        }
+      }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "contextRay.findings",
+          "name": "Findings"
+        },
+        {
+          "id": "contextRay.sources",
+          "name": "Context Sources"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsup --config tsup.config.ts",
+    "package": "pnpm build && vsce package --no-dependencies --out context-ray-vscode.vsix",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@context-ray/core": "workspace:*",
+    "@context-ray/reporters": "workspace:*",
+    "@context-ray/schema": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.100.0",
+    "@vscode/vsce": "^3.9.2",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3"
+  }
+}

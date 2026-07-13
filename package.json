@@ -1,0 +1,37 @@
+{
+  "name": "context-ray-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first effective context analysis for coding agents",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "build": "pnpm build:dashboard && pnpm --filter @context-ray/schema build && pnpm --filter @context-ray/core build && pnpm --filter @context-ray/reporters build && pnpm --filter context-ray build && pnpm --filter @context-ray/action build && pnpm --filter context-ray-vscode build",
+    "build:dashboard": "pnpm --filter @context-ray/dashboard build && node scripts/copy-dashboard-template.mjs",
+    "context-ray": "node --conditions=development --import tsx packages/cli/src/index.ts",
+    "dev:dashboard": "pnpm --filter @context-ray/dashboard dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "package:vscode": "pnpm build:dashboard && pnpm --filter context-ray-vscode package",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "pnpm -r typecheck",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.31.0",
+    "@types/node": "^24.1.0",
+    "eslint": "^9.31.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.3",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.38.0",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+pnpm-lock.yaml linguist-generated=false
+packages/action/dist/** linguist-generated=true

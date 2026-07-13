@@ -1,0 +1,45 @@
+{
+  "name": "context-ray",
+  "version": "0.1.0",
+  "description": "See what your coding agent can actually observe",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "context-ray": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "coding-agent",
+    "agents-md",
+    "claude-code",
+    "cursor",
+    "mcp",
+    "context"
+  ],
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean && node ../../scripts/copy-dashboard-template.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@context-ray/core": "workspace:*",
+    "@context-ray/reporters": "workspace:*",
+    "@context-ray/schema": "workspace:*",
+    "commander": "^14.0.0",
+    "open": "^10.1.2"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

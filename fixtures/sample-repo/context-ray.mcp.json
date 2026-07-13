@@ -1,0 +1,45 @@
+{
+  "servers": {
+    "postgres-admin": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "tools": [
+        {
+          "name": "query_database",
+          "description": "Run a read-only parameterized SQL query against the selected service database and return typed rows with execution metadata.",
+          "inputSchema": {
+            "type": "object",
+            "required": ["database", "query"],
+            "properties": {
+              "database": { "type": "string", "description": "Logical database name" },
+              "query": { "type": "string", "description": "Read-only SQL statement" },
+              "parameters": { "type": "array", "items": {} },
+              "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 30000 }
+            }
+          }
+        }
+      ]
+    },
+    "stripe-ops": {
+      "url": "https://mcp.example.test/stripe",
+      "tools": [
+        {
+          "name": "refund_charge",
+          "description": "Create a reviewed refund request for a captured charge.",
+          "inputSchema": {
+            "type": "object",
+            "required": ["chargeId", "amount", "reason"],
+            "properties": {
+              "chargeId": { "type": "string" },
+              "amount": { "type": "integer", "minimum": 1 },
+              "reason": {
+                "type": "string",
+                "enum": ["duplicate", "fraudulent", "customer_request"]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

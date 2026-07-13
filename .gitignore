@@ -1,0 +1,13 @@
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+.DS_Store
+*.log
+.context-ray/
+apps/dashboard/src/assets/
+packages/cli/src/assets/dashboard.html
+extensions/vscode/media/dashboard.html
+!packages/action/dist/
+!packages/action/dist/**
+*.vsix

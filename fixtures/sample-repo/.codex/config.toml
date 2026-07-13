@@ -1,0 +1,6 @@
+project_doc_max_bytes = 32768
+project_doc_fallback_filenames = ["TEAM_GUIDE.md"]
+
+[mcp_servers.postgres-admin]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-postgres"]

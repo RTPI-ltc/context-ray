@@ -1,0 +1,24 @@
+name: Feature request
+description: Propose a new adapter, rule, reporter, or workflow
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the job and current workaround before the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Product or protocol evidence
+      description: Link official documentation for agent or MCP behavior.
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Trust-boundary impact
+      description: Explain execution, network, credential, path, or observability changes.
+    validations:
+      required: true

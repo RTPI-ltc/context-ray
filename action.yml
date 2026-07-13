@@ -1,0 +1,36 @@
+name: Context Ray
+description: Analyze effective coding-agent context and publish JSON, SARIF, and job summaries
+author: Context Ray contributors
+branding:
+  icon: crosshair
+  color: purple
+inputs:
+  root:
+    description: Repository root
+    default: .
+  target:
+    description: Target file or directory used for scoped rules
+    default: .
+  agent:
+    description: codex, claude, cursor, copilot, or gemini
+    default: codex
+  fail-on:
+    description: none, note, warning, or error
+    default: error
+  output-directory:
+    description: Directory for generated reports
+    default: .context-ray
+outputs:
+  report:
+    description: JSON report path
+  sarif:
+    description: SARIF report path
+  effective-tokens:
+    description: Estimated effective context tokens
+  potential-waste-tokens:
+    description: Estimated removable context tokens
+  conflicts:
+    description: Number of policy conflicts
+runs:
+  using: node20
+  main: packages/action/dist/index.cjs

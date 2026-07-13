@@ -1,0 +1,8 @@
+---
+description: Payment test conventions
+globs:
+  - "services/payments/**"
+alwaysApply: false
+---
+
+Use contract fixtures for gateway behavior and deterministic clocks for retry tests.
