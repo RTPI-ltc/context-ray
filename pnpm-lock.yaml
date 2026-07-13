@@ -139,6 +139,9 @@ importers:
       "@context-ray/schema":
         specifier: workspace:*
         version: link:../schema
+      "@context-ray/server":
+        specifier: workspace:*
+        version: link:../server
       commander:
         specifier: ^14.0.0
         version: 14.0.3
@@ -201,6 +204,28 @@ importers:
         version: 5.9.3
 
   packages/schema:
+    devDependencies:
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.17)(tsx@4.23.0)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  packages/server:
+    dependencies:
+      "@context-ray/core":
+        specifier: workspace:*
+        version: link:../core
+      "@context-ray/reporters":
+        specifier: workspace:*
+        version: link:../reporters
+      "@context-ray/schema":
+        specifier: workspace:*
+        version: link:../schema
+      fast-glob:
+        specifier: ^3.3.3
+        version: 3.3.3
     devDependencies:
       tsup:
         specifier: ^8.5.0

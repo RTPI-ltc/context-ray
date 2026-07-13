@@ -29,6 +29,14 @@ Static scans do not execute package scripts, hooks, MCP commands, or agent CLIs.
 - React renders source labels and evidence as text.
 - SARIF and Markdown contain bounded excerpts, not full files.
 
+### Interactive Dashboard boundary
+
+- The local API binds only to `127.0.0.1`, `::1`, or `localhost` and rejects a non-loopback `Host` header.
+- Targets, report sources, real paths, and symlink destinations must remain inside the resolved repository root.
+- Request bodies, retained report count, and source-preview bytes are bounded.
+- The API has no endpoint that executes repository commands or rewrites configuration.
+- Portable HTML exports contain no live API capability; they are read-only snapshots.
+
 ### Honest observability
 
 The report distinguishes repository evidence, inference, and state that cannot be observed. A configured MCP server is not reported as live. Runtime I/O is not parsed as a private prompt.
@@ -40,6 +48,7 @@ The report distinguishes repository evidence, inference, and state that cannot b
 - A user can intentionally run an unsafe command through `trace`; Context Ray records but does not sandbox that command.
 - A GitHub Action still executes with the workflow's permissions. Use read-only permissions unless SARIF upload requires more.
 - Adapter drift can create false active/conditional labels until official behavior and fixtures are updated.
+- Any local web service shares the privileges of the user who started it. Keep the Dashboard on loopback and stop it when the session is no longer needed.
 
 ## CI guidance
 

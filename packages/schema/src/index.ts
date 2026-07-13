@@ -20,6 +20,7 @@ export type Observability = "observed" | "inferred" | "unobservable";
 export type Confidence = "high" | "medium" | "low";
 export type Severity = "error" | "warning" | "note";
 export type Relevance = "high" | "medium" | "low" | "unknown";
+export type LoadMode = "eager" | "progressive" | "on-demand";
 
 export interface SourceLocation {
   path: string;
@@ -166,6 +167,37 @@ export interface ReportDiff {
   removedSourceIds: string[];
   addedFindingIds: string[];
   resolvedFindingIds: string[];
+}
+
+export interface LoadModeProjection {
+  reportId: string;
+  sourceId: string;
+  sourceLabel: string;
+  currentMode: LoadMode;
+  requestedMode: LoadMode;
+  currentContributionTokens: number;
+  projectedContributionTokens: number;
+  deltaTokens: number;
+  projectedEffectiveTokens: number;
+  estimatedSavings: number;
+  estimatedIncrease: number;
+  confidence: Confidence;
+  explanation: string;
+  mutatesConfiguration: false;
+}
+
+export interface DashboardRuntime {
+  mode: "static" | "server" | "vscode";
+  root: string;
+  repoLabel: string;
+  agents: AgentId[];
+  targets: string[];
+  supports: {
+    scan: boolean;
+    projection: boolean;
+    sourcePreview: boolean;
+    export: boolean;
+  };
 }
 
 export function isScanReport(value: unknown): value is ScanReport {

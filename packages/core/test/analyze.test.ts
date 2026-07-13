@@ -57,4 +57,29 @@ describe("report comparison", () => {
     expect(diff.addedSourceIds).toEqual([]);
     expect(diff.addedFindingIds).toEqual([]);
   });
+
+  it("keeps scan IDs stable for identical inputs and separates task-specific reports", async () => {
+    const first = await analyzeContext({
+      root: fixture,
+      target,
+      agent: "codex",
+      task: "review payments",
+    });
+    const repeated = await analyzeContext({
+      root: fixture,
+      target,
+      agent: "codex",
+      task: "review payments",
+    });
+    const otherTask = await analyzeContext({
+      root: fixture,
+      target,
+      agent: "codex",
+      task: "review database access",
+    });
+
+    expect(repeated.scan.id).toBe(first.scan.id);
+    expect(otherTask.scan.id).not.toBe(first.scan.id);
+    expect(first.scan.task).toBe("review payments");
+  });
 });

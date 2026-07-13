@@ -21,5 +21,20 @@ describe("reporters", () => {
     expect(html).toContain("\\u003c/script>");
     expect(html).not.toContain("</script><script>unsafe()");
     expect(html).not.toContain("window.__CONTEXT_RAY_REPORT__ = null;");
+
+    const interactiveHtml = renderHtml(
+      report,
+      "<!doctype html><script>window.__CONTEXT_RAY_REPORT__ = null;window.__CONTEXT_RAY_RUNTIME__ = null;</script>",
+      {
+        mode: "server",
+        root: report.scan.root,
+        repoLabel: "sample-repo",
+        agents: ["codex"],
+        targets: [report.scan.target],
+        supports: { scan: true, projection: true, sourcePreview: true, export: true },
+      },
+    );
+    expect(interactiveHtml).toContain('"mode":"server"');
+    expect(interactiveHtml).not.toContain("window.__CONTEXT_RAY_RUNTIME__ = null;");
   });
 });

@@ -7,7 +7,8 @@
     "paths": {
       "@context-ray/schema": ["packages/schema/src/index.ts"],
       "@context-ray/core": ["packages/core/src/index.ts"],
-      "@context-ray/reporters": ["packages/reporters/src/index.ts"]
+      "@context-ray/reporters": ["packages/reporters/src/index.ts"],
+      "@context-ray/server": ["packages/server/src/index.ts"]
     },
     "strict": true,
     "noUncheckedIndexedAccess": true,

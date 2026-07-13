@@ -15,6 +15,7 @@ Context Ray 是一个本地优先的 Coding Agent 有效上下文分析器。它
 - 支持 Codex、Claude Code、Cursor、GitHub Copilot、Gemini CLI 五种适配器；
 - 输出终端、JSON、Markdown、SARIF 和单文件 HTML；
 - 提供交互式 Dashboard、VS Code 扩展和 GitHub Action；
+- Dashboard 的扫描、情景投影、源文件预览与导出由本地回环 API 或 VS Code 扩展主机执行，不使用演示数据兜底；
 - 支持报告基线比较与严重级别门禁；
 - 普通静态扫描绝不执行仓库脚本或启动 MCP 进程；
 - `trace` 仅在用户显式给出命令时记录进程元数据。
@@ -28,6 +29,15 @@ corepack enable
 pnpm install
 pnpm context-ray scan fixtures/sample-repo --agent codex --target services/payments
 ```
+
+运行可重新扫描的交互式 Dashboard：
+
+```bash
+pnpm build
+node packages/cli/dist/index.js serve fixtures/sample-repo --agent codex --target services/payments
+```
+
+随后打开 `http://127.0.0.1:4173/`。页面里的 Agent、Target、Task 和“Run scan”都会调用真实分析内核。通过 `scan --format html` 导出的单文件报告是可携带的只读快照；如需重新扫描、源文件预览或情景投影，应使用 `serve` 或 VS Code 扩展。
 
 生成 JSON、SARIF 与 HTML：
 

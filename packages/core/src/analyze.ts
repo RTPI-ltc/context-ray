@@ -468,7 +468,7 @@ export async function analyzeContext(options: ScanOptions): Promise<ScanReport> 
   );
   const reportId = createHash("sha256")
     .update(
-      `${root}:${options.agent}:${options.target ?? "."}:${discovery.sources.map((source) => source.contentHash).join(":")}`,
+      `${root}:${options.agent}:${options.target ?? "."}:${options.task ?? ""}:${discovery.sources.map((source) => source.contentHash).join(":")}`,
     )
     .digest("hex")
     .slice(0, 16);

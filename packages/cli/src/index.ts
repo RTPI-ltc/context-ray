@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Command, InvalidArgumentError, Option } from "commander";
 import open from "open";
 import { analyzeContext, compareReports, isScanReport, observeRuntime } from "@context-ray/core";
+import { startContextRayServer } from "@context-ray/server";
 import type { AgentId, ScanReport, Severity } from "@context-ray/schema";
 import {
   formatDiff,
@@ -39,6 +40,14 @@ function parseAgent(value: string): AgentId {
 
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
+}
+
+function parsePort(value: string): number {
+  const port = Number.parseInt(value, 10);
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    throw new InvalidArgumentError("Expected a TCP port between 0 and 65535.");
+  }
+  return port;
 }
 
 async function atomicWrite(filePath: string, content: string): Promise<void> {
@@ -230,6 +239,52 @@ program
       `Context Ray ${VERSION}\nNode ${process.version}\nAdapters: ${AGENTS.join(", ")}\nStatic scans never execute repository commands.\nRuntime and MCP probing require explicit commands.\n`,
     );
   });
+
+program
+  .command("serve")
+  .description("run the real local analysis API and interactive dashboard")
+  .argument("[root]", "repository root", ".")
+  .option("-a, --agent <agent>", "initial agent adapter", parseAgent, "codex" as AgentId)
+  .option("-t, --target <path>", "initial target file or directory", ".")
+  .option("--host <host>", "loopback host", "127.0.0.1")
+  .option("--port <port>", "local TCP port", parsePort, 4173)
+  .option("--open", "open the dashboard in the default browser")
+  .action(
+    async (
+      root: string,
+      flags: {
+        agent: AgentId;
+        target: string;
+        host: string;
+        port: number;
+        open?: boolean;
+      },
+    ) => {
+      const dashboardHtml = await loadHtmlTemplate();
+      const running = await startContextRayServer({
+        root: path.resolve(root),
+        dashboardHtml,
+        host: flags.host,
+        port: flags.port,
+        agent: flags.agent,
+        target: flags.target,
+      });
+      process.stderr.write(
+        `Context Ray dashboard ${running.url}\nRepository ${running.root}\nPress Ctrl+C to stop.\n`,
+      );
+      if (flags.open) await open(running.url, { wait: false });
+      await new Promise<void>((resolve, reject) => {
+        let closing = false;
+        const close = (): void => {
+          if (closing) return;
+          closing = true;
+          running.close().then(resolve, reject);
+        };
+        process.once("SIGINT", close);
+        process.once("SIGTERM", close);
+      });
+    },
+  );
 
 program.parseAsync().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);

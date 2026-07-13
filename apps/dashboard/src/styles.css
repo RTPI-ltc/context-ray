@@ -30,7 +30,8 @@ body {
 
 button,
 select,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -46,6 +47,7 @@ button {
 button:focus-visible,
 select:focus-visible,
 input:focus-visible,
+textarea:focus-visible,
 .chart-source:focus-visible {
   outline: 2px solid #63cfff;
   outline-offset: 2px;
@@ -58,6 +60,7 @@ input:focus-visible,
 }
 
 .topbar {
+  position: relative;
   height: 59px;
   display: grid;
   grid-template-columns: 184px 182px 160px 256px minmax(240px, 1fr) 130px 46px;
@@ -110,6 +113,22 @@ input:focus-visible,
   line-height: 19px;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.context-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 19px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-field select:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
 }
 
 .agent-field select,
@@ -174,6 +193,115 @@ input:focus-visible,
 .more-button {
   font-size: 18px;
   letter-spacing: 2px;
+}
+
+.settings-popover {
+  position: absolute;
+  z-index: 8;
+  top: 51px;
+  right: 9px;
+  width: 330px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid #43515c;
+  border-radius: 6px;
+  background: #101a21;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.settings-popover label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #dce4e8;
+  font-size: 11px;
+}
+
+.settings-popover textarea {
+  min-height: 76px;
+  resize: vertical;
+  border: 1px solid #3a4650;
+  border-radius: 4px;
+  padding: 9px 10px;
+  background: #091219;
+  color: #eef4f7;
+  line-height: 17px;
+}
+
+.settings-popover small {
+  color: #98a5ad;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.export-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.export-row select,
+.export-row button {
+  height: 34px;
+  border: 1px solid #3c4a54;
+  border-radius: 4px;
+  background: #131f27;
+  color: #e4ebef;
+}
+
+.export-row select {
+  padding: 0 9px;
+}
+
+.export-row button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border-color: #386ca9;
+  color: #8fd3ff;
+}
+
+.error-banner {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 20px;
+  border-bottom: 1px solid #713735;
+  background: #2b1718;
+  color: #ffaaa4;
+  font-size: 11px;
+}
+
+.empty-state {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  padding: 40px;
+  color: #aab6be;
+  text-align: center;
+}
+
+.empty-state svg {
+  color: #7acff5;
+}
+
+.empty-state h1 {
+  margin: 14px 0 6px;
+  color: #edf3f6;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 22px;
+}
+
+.empty-state p {
+  max-width: 620px;
+  margin: 0;
+  line-height: 20px;
 }
 
 .metrics-strip {
@@ -818,6 +946,45 @@ input:focus-visible,
   font-size: 10px;
 }
 
+.evidence-block p {
+  margin-bottom: 9px;
+}
+
+.source-preview {
+  margin-top: 11px;
+  border: 1px solid #33414a;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #071017;
+}
+
+.source-preview strong {
+  display: block;
+  padding: 7px 9px;
+  border-bottom: 1px solid #28343c;
+  color: #9bdcff;
+  font-size: 9.5px;
+  font-weight: 500;
+}
+
+.source-preview pre {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding: 9px;
+  color: #c7d3da;
+  font:
+    9.5px/15px "IBM Plex Mono",
+    monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.inline-error {
+  margin-top: 10px !important;
+  color: #ff8d86 !important;
+}
+
 .inspector-footer {
   min-height: 69px;
   display: flex;
@@ -874,10 +1041,15 @@ input:focus-visible,
 
 @media (max-width: 980px) {
   body {
-    min-width: 760px;
+    min-width: 680px;
   }
   .topbar {
-    grid-template-columns: 170px 150px 130px minmax(200px, 1fr) 120px 42px;
+    grid-template-columns: 140px 125px 110px minmax(150px, 1fr) 100px 38px;
+  }
+  .brand,
+  .context-field {
+    padding-right: 12px;
+    padding-left: 12px;
   }
   .scan-meta {
     display: none;
@@ -891,5 +1063,8 @@ input:focus-visible,
     z-index: 4;
     width: 430px;
     box-shadow: -16px 0 40px rgba(0, 0, 0, 0.42);
+  }
+  .settings-popover {
+    right: 5px;
   }
 }

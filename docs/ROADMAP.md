@@ -5,7 +5,9 @@
 - Five repository adapters.
 - Source states, provenance edges, coverage, findings, recommendations, and report diff.
 - Terminal, JSON, Markdown, SARIF, and standalone HTML.
-- Interactive Dashboard, VS Code extension, GitHub Action.
+- Loopback-backed interactive Dashboard with real rescans, projection, source preview, and export.
+- VS Code extension with host-bridged Dashboard, diagnostics, trees, rescan-on-save, and save-dialog export.
+- GitHub Action with JSON/SARIF/Markdown artifacts, annotations, job summary, and severity gate.
 - Explicit runtime process observation.
 
 ## 0.2 — adapter hardening

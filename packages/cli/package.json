@@ -32,6 +32,7 @@
     "@context-ray/core": "workspace:*",
     "@context-ray/reporters": "workspace:*",
     "@context-ray/schema": "workspace:*",
+    "@context-ray/server": "workspace:*",
     "commander": "^14.0.0",
     "open": "^10.1.2"
   },

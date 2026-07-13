@@ -12,7 +12,11 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["packages/**/test/**/*.test.ts", "extensions/**/test/**/*.test.ts"],
+    include: [
+      "apps/**/test/**/*.test.{js,ts}",
+      "packages/**/test/**/*.test.ts",
+      "extensions/**/test/**/*.test.ts",
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary"],

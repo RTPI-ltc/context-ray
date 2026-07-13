@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Bar } from "@visx/shape";
 import {
   IconAlertTriangle,
@@ -6,6 +6,7 @@ import {
   IconChevronDown,
   IconChevronRight,
   IconDatabase,
+  IconDownload,
   IconFileDescription,
   IconFileText,
   IconInfoCircle,
@@ -13,57 +14,46 @@ import {
   IconLoader2,
   IconPlayerPlay,
   IconPlug,
+  IconSettings,
   IconSparkles,
   IconSunHigh,
   IconTable,
   IconX,
 } from "@tabler/icons-react";
-import { demoReport } from "./demo-report.js";
+import { createDashboardApi } from "./api.js";
+import {
+  AGENTS,
+  buildBands,
+  compact,
+  formatScanLabel,
+  loadModeForSource,
+  recommendationForSource,
+  referencesForItem,
+  reportItems,
+} from "./model.js";
 
-const COLORS = {
-  Instructions: { fill: "#8070c7", stroke: "#9d8be4", tint: "rgba(128,112,199,.36)" },
-  Skills: { fill: "#317dcc", stroke: "#5d9ce0", tint: "rgba(49,125,204,.34)" },
-  MCP: { fill: "#1794a9", stroke: "#4cc2d0", tint: "rgba(23,148,169,.34)" },
-  References: { fill: "#ad7b08", stroke: "#e8ae28", tint: "rgba(173,123,8,.34)" },
-  Conflicts: { fill: "#9d3736", stroke: "#d65f58", tint: "rgba(157,55,54,.34)" },
-};
+const PALETTES = [
+  { fill: "#8070c7", stroke: "#9d8be4", tint: "rgba(128,112,199,.36)" },
+  { fill: "#526b80", stroke: "#7893a8", tint: "rgba(82,107,128,.34)" },
+  { fill: "#317dcc", stroke: "#5d9ce0", tint: "rgba(49,125,204,.34)" },
+  { fill: "#1794a9", stroke: "#4cc2d0", tint: "rgba(23,148,169,.34)" },
+  { fill: "#ad7b08", stroke: "#e8ae28", tint: "rgba(173,123,8,.34)" },
+  { fill: "#9d3736", stroke: "#d65f58", tint: "rgba(157,55,54,.34)" },
+];
 
-const BAND_ORDER = ["Instructions", "Skills", "MCP", "References", "Conflicts"];
-
-function compact(value) {
-  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 1 : 1)}k`;
-  return String(value);
-}
-
-function groupFor(source) {
-  if (source.metadata?.uiGroup) return source.metadata.uiGroup;
-  if (source.kind === "instruction") return "Instructions";
-  if (source.kind === "skill") return "Skills";
-  if (source.kind === "mcp-tool" || source.kind === "mcp-server") return "MCP";
-  if (source.kind === "referenced-file") return "References";
-  return "Configuration";
-}
-
-function visualWeight(source, bandName) {
-  if (bandName === "Conflicts") return 1;
-  const cappedTokens =
-    bandName === "References" ? Math.min(source.tokenEstimate, 2100) : source.tokenEstimate;
-  const aggregatePenalty = bandName === "References" && source.label.startsWith("+") ? 0.65 : 1;
-  return Math.sqrt(Math.max(1, cappedTokens)) * aggregatePenalty;
-}
-
-function sourceIcon(source, size = 18) {
-  if (source.kind === "mcp-tool" || source.kind === "mcp-server") {
-    return source.serverName === "postgres-admin" ||
-      source.metadata?.serverName === "postgres-admin" ? (
+function sourceIcon(item, size = 18) {
+  if (item.itemType === "finding") return <IconAlertTriangle size={size} stroke={1.7} />;
+  if (item.kind === "mcp-tool" || item.kind === "mcp-server") {
+    return item.serverName === "postgres-admin" ? (
       <IconDatabase size={size} stroke={1.7} />
     ) : (
       <IconPlug size={size} stroke={1.7} />
     );
   }
-  if (source.kind === "skill") return <IconSparkles size={size} stroke={1.7} />;
-  if (source.kind === "config" || source.kind === "mcp-config")
+  if (item.kind === "skill") return <IconSparkles size={size} stroke={1.7} />;
+  if (item.kind === "config" || item.kind === "mcp-config") {
     return <IconFileDescription size={size} stroke={1.7} />;
+  }
   return <IconFileText size={size} stroke={1.7} />;
 }
 
@@ -73,37 +63,26 @@ function Metric({ label, value = null, tone = "default", suffix = null, children
       <div className="metric-label">
         {label} <IconInfoCircle size={14} stroke={1.7} />
       </div>
-      {value ? <div className={`metric-value ${tone}`}>{value}</div> : children}
+      {value !== null ? <div className={`metric-value ${tone}`}>{value}</div> : children}
       {suffix ? <div className="metric-suffix">{suffix}</div> : null}
     </section>
   );
 }
 
-function CompositionChart({
-  sources,
-  findings,
-  selectedId,
-  onSelect,
-  showEstimates,
-  view,
-  toolSchemaTokens,
-}) {
-  const bands = BAND_ORDER.map((name) => {
-    const items = sources.filter((source) => groupFor(source) === name);
-    return { name, items };
-  });
-  const width = 1000;
+function visualWeight(item, bandName) {
+  if (item.itemType === "finding" || bandName === "Findings") return 1;
+  const capped =
+    bandName === "References" ? Math.min(item.tokenEstimate, 2_100) : item.tokenEstimate;
+  return Math.sqrt(Math.max(1, capped));
+}
+
+function CompositionChart({ report, groupBy, selectedId, onSelect, showEstimates, view }) {
+  const bands = buildBands(report, groupBy);
+  const width = 1_000;
   const top = 8;
   const gap = 6;
   const bandHeight = view === "list" ? 62 : 80;
   const chartHeight = top + bands.length * (bandHeight + gap) + 18;
-  const titles = {
-    Instructions: `AGENTS.md chain (${bands[0]?.items.length ?? 0} files)`,
-    Skills: `Skills (${bands[1]?.items.length ?? 0})`,
-    MCP: `MCP servers (${bands[2]?.items.length ?? 0})`,
-    References: "Referenced files (top)",
-    Conflicts: `Conflicts & overrides (${findings.length})`,
-  };
 
   return (
     <div className="composition-svg-wrap">
@@ -111,22 +90,15 @@ function CompositionChart({
         className="composition-svg"
         viewBox={`0 0 ${width} ${chartHeight}`}
         role="img"
-        aria-label="Effective context token composition"
+        aria-label={`Effective context grouped by ${groupBy}`}
       >
         {bands.map((band, bandIndex) => {
           const y = top + bandIndex * (bandHeight + gap);
-          const palette = COLORS[band.name];
-          const total = band.items.reduce((sum, source) => sum + source.tokenEstimate, 0);
+          const palette = PALETTES[bandIndex] ?? PALETTES[0];
           const totalWeight = band.items.reduce(
-            (sum, source) => sum + visualWeight(source, band.name),
+            (sum, item) => sum + visualWeight(item, band.name),
             0,
           );
-          const countTotal =
-            band.name === "Conflicts"
-              ? findings.length
-              : band.name === "MCP"
-                ? toolSchemaTokens
-                : total;
           let cursor = 10;
           return (
             <g key={band.name}>
@@ -141,55 +113,53 @@ function CompositionChart({
                 strokeWidth={0.8}
               />
               <text x={10} y={y + 20} className="band-title">
-                {titles[band.name]}
+                {band.name} ({band.count})
               </text>
               <text x={width - 10} y={y + 20} textAnchor="end" className="band-total">
                 {showEstimates
-                  ? band.name === "Conflicts"
-                    ? countTotal
-                    : compact(countTotal)
+                  ? band.name === "Findings"
+                    ? band.count
+                    : compact(band.totalTokens)
                   : ""}
               </text>
-              {band.items.map((source, itemIndex) => {
+              {band.items.map((item) => {
                 const available = width - 20;
                 const itemWidth = Math.max(
                   85,
-                  available * (visualWeight(source, band.name) / Math.max(1, totalWeight)),
+                  available * (visualWeight(item, band.name) / Math.max(1, totalWeight)),
                 );
                 const clamped = Math.min(itemWidth, width - 10 - cursor);
-                const selected = source.id === selectedId;
-                const itemY = y + 28;
-                const itemHeight = bandHeight - 36;
-                const label = source.label;
-                const shortLabel = label.length > 40 ? `${label.slice(0, 38)}…` : label;
-                const labelLines =
-                  band.name === "MCP" && shortLabel.includes(" / ")
-                    ? shortLabel.split(" / ", 2)
-                    : band.name === "References" && shortLabel.includes("/src/")
-                      ? [shortLabel.split("/src/")[0] + "/src/", shortLabel.split("/src/")[1]]
-                      : [shortLabel];
                 const x = cursor;
                 cursor += clamped;
                 if (clamped <= 0) return null;
+                const selected = item.id === selectedId;
+                const itemY = y + 28;
+                const itemHeight = bandHeight - 36;
+                const shortLabel =
+                  item.label.length > 40 ? `${item.label.slice(0, 38)}…` : item.label;
+                const select = () => onSelect(item.id);
                 return (
                   <g
-                    key={source.id}
+                    key={item.id}
                     className="chart-source"
-                    onClick={() => onSelect(source.id)}
+                    onClick={select}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") select();
+                    }}
                     tabIndex={0}
                     role="button"
-                    aria-label={`Inspect ${label}`}
+                    aria-label={`Inspect ${item.label}`}
                   >
                     <Bar
                       x={x}
                       y={itemY}
-                      width={clamped - 2}
+                      width={Math.max(1, clamped - 2)}
                       height={itemHeight}
                       fill={selected ? palette.tint : "rgba(4,13,19,.24)"}
                       stroke={selected ? "#eef8ff" : palette.stroke}
                       strokeWidth={selected ? 1.5 : 0.8}
                     />
-                    <clipPath id={`source-clip-${source.id}`}>
+                    <clipPath id={`source-clip-${item.id.replaceAll(":", "-")}`}>
                       <rect
                         x={x + 2}
                         y={itemY + 1}
@@ -197,43 +167,25 @@ function CompositionChart({
                         height={itemHeight - 2}
                       />
                     </clipPath>
-                    <g clipPath={`url(#source-clip-${source.id})`}>
-                      {band.name === "Conflicts" && itemIndex === 0 ? (
+                    <g clipPath={`url(#source-clip-${item.id.replaceAll(":", "-")})`}>
+                      {item.itemType === "finding" ? (
                         <IconAlertTriangle x={x + 8} y={itemY + 8} size={14} color="#ef7269" />
                       ) : null}
                       <text
-                        x={x + (band.name === "Conflicts" && itemIndex === 0 ? 28 : 10)}
+                        x={x + (item.itemType === "finding" ? 28 : 10)}
                         y={itemY + 14}
                         className="source-label"
                       >
-                        {labelLines.map((line, lineIndex) => (
-                          <tspan
-                            key={lineIndex}
-                            x={x + (band.name === "Conflicts" && itemIndex === 0 ? 28 : 10)}
-                            dy={lineIndex === 0 ? 0 : 12}
-                          >
-                            {lineIndex > 0 && band.name === "MCP" ? `/ ${line}` : line}
-                          </tspan>
-                        ))}
+                        {shortLabel}
                       </text>
-                      {showEstimates && source.tokenEstimate > 0 && clamped > 85 ? (
+                      {showEstimates && item.tokenEstimate > 0 && clamped > 85 ? (
                         <text
                           x={x + clamped - 10}
                           y={itemY + itemHeight - 5}
                           textAnchor="end"
                           className="source-token"
                         >
-                          {compact(source.tokenEstimate)}
-                        </text>
-                      ) : null}
-                      {band.name === "Conflicts" ? (
-                        <text
-                          x={x + clamped - 10}
-                          y={itemY + itemHeight - 5}
-                          textAnchor="end"
-                          className="source-token"
-                        >
-                          1
+                          {compact(item.tokenEstimate)}
                         </text>
                       ) : null}
                     </g>
@@ -247,14 +199,14 @@ function CompositionChart({
       <div className="axis-row">
         <span>0</span>
         <span>Tokens (estimated)</span>
-        <span>{compact(48300)}</span>
+        <span>{compact(report.summary.effectiveTokens)}</span>
       </div>
     </div>
   );
 }
 
 function Relevance({ value }) {
-  const label = value === "unknown" ? "Unknown" : value[0].toUpperCase() + value.slice(1);
+  const label = value[0].toUpperCase() + value.slice(1);
   return (
     <span className={`relevance ${value}`}>
       <span className="dot" />
@@ -263,39 +215,32 @@ function Relevance({ value }) {
   );
 }
 
-function SourcesTable({ sources, selectedId, onSelect, expanded, onToggle, totalSourceCount }) {
-  const sorted = [...sources]
-    .filter(
-      (source) =>
-        source.tokenEstimate > 0 &&
-        source.kind !== "skill" &&
-        groupFor(source) !== "Conflicts" &&
-        !source.metadata?.hideFromTable &&
-        !source.label.startsWith("+"),
-    )
+function SourcesTable({ report, selectedId, onSelect, expanded, onToggle }) {
+  const sorted = [...report.sources]
+    .filter((source) => source.tokenEstimate > 0)
     .sort((left, right) => right.tokenEstimate - left.tokenEstimate);
-  const shown = sorted.slice(0, expanded ? 12 : 6);
+  const shown = sorted.slice(0, expanded ? sorted.length : 6);
   return (
     <section className="sources-section">
       <header className="section-heading table-heading">
         <div>
           <strong>Top sources by tokens</strong>
-          <span>(sorted by est. tokens)</span>
+          <span>(real scan, sorted by estimate)</span>
           <IconInfoCircle size={14} />
         </div>
       </header>
       <div className="source-table" role="table">
         <div className="table-row table-header" role="row">
           <span>Source</span>
-          <span>Load mode</span>
+          <span>Observed mode</span>
           <span>Tokens (est.) ↓</span>
           <span>Relevance</span>
-          <span>Recommendation</span>
+          <span>Backend recommendation</span>
           <span />
         </div>
         {shown.map((source) => {
-          const loadMode =
-            source.metadata?.loadMode ?? (source.status === "on-demand" ? "On-demand" : "Eager");
+          const recommendation = recommendationForSource(report, source.id);
+          const loadMode = loadModeForSource(source);
           return (
             <button
               className={`table-row ${source.id === selectedId ? "selected" : ""}`}
@@ -317,8 +262,12 @@ function SourcesTable({ sources, selectedId, onSelect, expanded, onToggle, total
                 <Relevance value={source.relevance} />
               </span>
               <span className="recommendation-cell">
-                <b>{source.metadata?.recommendation ?? "Keep"}</b>
-                <small>{source.metadata?.recommendationDetail ?? "Observed source"}</small>
+                <b>{recommendation.title}</b>
+                <small>
+                  {recommendation.savings > 0
+                    ? `Est. save ${compact(recommendation.savings)}`
+                    : "No savings estimate"}
+                </small>
               </span>
               <span className="more">•••</span>
             </button>
@@ -327,186 +276,313 @@ function SourcesTable({ sources, selectedId, onSelect, expanded, onToggle, total
       </div>
       <footer className="table-footer">
         <span>
-          Showing 1–{shown.length} of {totalSourceCount} sources
+          Showing {shown.length} of {sorted.length} token-bearing sources · {report.sources.length}{" "}
+          total
         </span>
-        <button onClick={onToggle}>
-          {expanded ? "Show less" : "View all"}
-          <IconChevronRight size={16} />
-        </button>
+        {sorted.length > 6 ? (
+          <button onClick={onToggle}>
+            {expanded ? "Show less" : "View all"}
+            <IconChevronRight size={16} />
+          </button>
+        ) : null}
       </footer>
     </section>
   );
 }
 
-function Inspector({ source, onClose, onModeChange }) {
-  const recommendation =
-    source.metadata?.recommendation ??
-    (source.relevance === "low" ? "Progressive discovery" : "Keep");
-  const [mode, setMode] = useState(
-    recommendation === "Progressive discovery"
-      ? recommendation
-      : (source.metadata?.loadMode ?? "Eager"),
+function Confidence({ value }) {
+  const count = value === "high" ? 3 : value === "medium" ? 2 : 1;
+  return (
+    <strong className="confidence-dots">
+      {Array.from({ length: 3 }, (_, index) => (index < count ? "●" : "○")).join(" ")}{" "}
+      <em>{value}</em>
+    </strong>
   );
-  const savings = Number(source.metadata?.savings ?? Math.round(source.tokenEstimate * 0.4));
-  const evidence = source.metadata?.evidence ?? [
-    `Discovered at ${source.path}`,
-    source.reason,
-    "No provider-internal prompt data is assumed",
-  ];
-  const changeMode = (event) => {
-    setMode(event.target.value);
-    onModeChange(event.target.value);
+}
+
+function Inspector({ report, item, api, onClose, onToast }) {
+  const [scenario, setScenario] = useState(
+    item.itemType === "source"
+      ? loadModeForSource(item).toLowerCase().replace("progressive", "progressive")
+      : "eager",
+  );
+  const [projection, setProjection] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const references = referencesForItem(report, item);
+  const recommendation =
+    item.itemType === "finding"
+      ? {
+          title: item.finding.title,
+          description: item.finding.recommendation,
+          savings: item.finding.estimatedSavings ?? 0,
+          confidence: item.finding.confidence,
+        }
+      : recommendationForSource(report, item.id);
+  const percent = report.summary.effectiveTokens
+    ? Math.round((item.tokenEstimate / report.summary.effectiveTokens) * 100)
+    : 0;
+
+  const project = async (event) => {
+    const mode = event.target.value;
+    setScenario(mode);
+    setBusy(true);
+    setLocalError("");
+    try {
+      const next = await api.project({ reportId: report.scan.id, sourceId: item.id, mode });
+      setProjection(next);
+      onToast(`Scenario recalculated by ${api.mode === "server" ? "local API" : "VS Code host"}`);
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const showPreview = async () => {
+    setBusy(true);
+    setLocalError("");
+    try {
+      setPreview(await api.sourcePreview(report.scan.id, item.id));
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <aside className="inspector">
       <div className="inspector-scroll">
         <header className="inspector-title">
-          <div className="inspector-source-icon">{sourceIcon(source, 25)}</div>
+          <div className="inspector-source-icon">{sourceIcon(item, 25)}</div>
           <h2>
-            {source.metadata?.serverName ?? source.serverName ?? source.label.split(" / ")[0]}
-            <span>
-              {source.metadata?.toolName
-                ? `/ ${source.metadata.toolName}`
-                : source.label.includes(" / ")
-                  ? `/ ${source.label.split(" / ").slice(1).join(" / ")}`
-                  : source.path}
-            </span>
+            {item.label}
+            <span>{item.path}</span>
           </h2>
           <button className="icon-button" aria-label="Close inspector" onClick={onClose}>
             <IconX size={20} />
           </button>
         </header>
         <div className="badges">
-          <span className="badge blue">{source.kind.replace("mcp-", "MCP ")}</span>
-          <span className={`badge ${source.relevance === "low" ? "red" : "green"}`}>
-            {source.relevance} relevance
+          <span className="badge blue">
+            {item.itemType === "finding" ? item.finding.ruleId : item.kind}
+          </span>
+          <span className={`badge ${item.relevance === "low" ? "red" : "green"}`}>
+            {item.itemType === "finding" ? item.finding.severity : `${item.relevance} relevance`}
           </span>
         </div>
         <div className="inspector-block token-block">
           <label>Tokens (est.)</label>
-          <strong>{compact(source.tokenEstimate)}</strong>
+          <strong>{compact(item.tokenEstimate)}</strong>
           <span>
-            (
-            {source.tokenEstimate
-              ? `~${Math.round((source.tokenEstimate / 48300) * 100)}% of startup context`
-              : "not token-bearing"}
-            )
+            {item.itemType === "finding"
+              ? "finding metadata"
+              : item.tokenEstimate
+                ? `~${percent}% of measured startup context`
+                : "No startup token contribution"}
           </span>
         </div>
         <div className="inspector-block">
-          <label>Description</label>
-          <p>{source.metadata?.description ?? source.reason}</p>
+          <label>{item.itemType === "finding" ? "Finding" : "Why it’s loaded"}</label>
+          <p>{item.reason}</p>
         </div>
-        <div className="inspector-block">
-          <label>Why it’s loaded</label>
-          <p>{source.reason}</p>
-        </div>
-        <div className="inspector-block">
-          <label>Relevance (observed)</label>
-          <p>
-            {source.relevance === "low"
-              ? `Not referenced in target path (${demoReport.scan.target}). No static imports of this source were detected.`
-              : `Directly associated with the selected target or repository policy.`}
-          </p>
-        </div>
+        {item.itemType === "source" ? (
+          <div className="inspector-block">
+            <label>Observed evidence</label>
+            <p>
+              Target <b>{report.scan.target}</b> · {item.observability} · {item.confidence}{" "}
+              confidence
+            </p>
+          </div>
+        ) : null}
         <div className="inspector-block recommendation-block">
           <label>
-            Recommendation <IconInfoCircle size={14} />
+            {projection ? "Backend scenario result" : "Backend recommendation"}{" "}
+            <IconInfoCircle size={14} />
           </label>
           <div className="recommendation-card">
-            <h3>{recommendation}</h3>
-            <p>
-              {recommendation === "Progressive discovery"
-                ? "Discover and load this tool only when user intent indicates database inspection is needed."
-                : "Keep this source in its current load path."}
-            </p>
+            <h3>{projection ? `${projection.requestedMode} scenario` : recommendation.title}</h3>
+            <p>{projection?.explanation ?? recommendation.description}</p>
             <div className="recommendation-stats">
               <div>
-                <span>Estimated savings</span>
+                <span>{projection ? "Projected startup" : "Estimated savings"}</span>
                 <strong>
-                  {compact(savings)} tokens (
-                  {source.tokenEstimate ? Math.round((savings / source.tokenEstimate) * 100) : 0}%)
+                  {projection
+                    ? `${compact(projection.projectedEffectiveTokens)} tokens`
+                    : `${compact(recommendation.savings)} tokens`}
                 </strong>
               </div>
               <div>
                 <span>Confidence</span>
-                <strong className="confidence-dots">
-                  ● ● ● ○ ○ <em>Medium</em>
-                </strong>
+                <Confidence value={projection?.confidence ?? recommendation.confidence} />
               </div>
             </div>
-            <small>May add 1 extra tool call when first needed.</small>
+            <small>
+              {projection
+                ? `Delta ${projection.deltaTokens > 0 ? "+" : ""}${compact(projection.deltaTokens)} tokens. Scenario only; configuration is unchanged.`
+                : "Derived from the current report and linked findings."}
+            </small>
           </div>
         </div>
-        <div className="inspector-block load-mode">
-          <label htmlFor="load-mode">Load mode</label>
-          <div className="select-wrap">
-            <span>Change to:</span>
-            <select id="load-mode" value={mode} onChange={changeMode}>
-              <option>Eager</option>
-              <option>Progressive discovery</option>
-              <option>On-demand</option>
-            </select>
-            <IconChevronDown size={16} />
+        {item.itemType === "source" ? (
+          <div className="inspector-block load-mode">
+            <label htmlFor="load-mode">Scenario load mode</label>
+            <div className="select-wrap">
+              <span>Project as:</span>
+              <select
+                id="load-mode"
+                value={scenario}
+                onChange={project}
+                disabled={!api.supports.projection || busy}
+              >
+                <option value="eager">Eager</option>
+                <option value="progressive">Progressive</option>
+                <option value="on-demand">On-demand</option>
+              </select>
+              <IconChevronDown size={16} />
+            </div>
+            <small>
+              Observed: {loadModeForSource(item)} · this control runs analysis, not a config write
+            </small>
           </div>
-          <small>Current: {source.metadata?.loadMode ?? "Eager"}</small>
-        </div>
+        ) : null}
         <div className="inspector-block evidence-block">
-          <label>Evidence</label>
-          <ul>
-            {evidence.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-          <button>
-            View references (0)
-            <IconChevronRight size={16} />
-          </button>
+          <label>References ({references.length})</label>
+          {references.length > 0 ? (
+            <ul>
+              {references.map((reference, index) => (
+                <li key={`${reference.path}-${reference.line ?? 0}-${index}`}>
+                  {reference.path}
+                  {reference.line ? `:${reference.line}` : ""} — {reference.excerpt}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No finding or provenance edge references this item.</p>
+          )}
+          {item.itemType === "source" && api.supports.sourcePreview ? (
+            <button onClick={showPreview} disabled={busy}>
+              {busy ? "Loading…" : preview ? "Refresh source excerpt" : "View source excerpt"}
+              <IconChevronRight size={16} />
+            </button>
+          ) : null}
+          {preview ? (
+            <div className="source-preview">
+              <strong>
+                {preview.path}:{preview.startLine}–{preview.endLine}
+              </strong>
+              <pre>{preview.content}</pre>
+            </div>
+          ) : null}
+          {localError ? <p className="inline-error">{localError}</p> : null}
         </div>
       </div>
       <footer className="inspector-footer">
         <div>
-          Observability: <b>Repository observed</b> · <b>Runtime partially observable</b>
+          Observability: <b>{item.observability}</b> · Confidence: <b>{item.confidence}</b>
         </div>
-        <span>Estimates derived from static analysis and schema heuristics.</span>
+        <span>Exact provider prompts remain outside repository observability.</span>
       </footer>
     </aside>
   );
 }
 
+function EmptyState({ error }) {
+  return (
+    <main className="empty-state">
+      <IconSunHigh size={36} />
+      <h1>No report is loaded</h1>
+      <p>{error || "Run `context-ray serve <repo>` or open an exported Context Ray report."}</p>
+    </main>
+  );
+}
+
 export function App() {
   const injected = typeof window !== "undefined" ? window.__CONTEXT_RAY_REPORT__ : null;
-  const report = injected ?? demoReport;
-  const visibleSources = useMemo(
-    () => report.sources.filter((source) => groupFor(source) !== "Configuration"),
-    [report],
-  );
-  const [selectedId, setSelectedId] = useState(
-    visibleSources.find((source) => source.kind === "mcp-tool")?.id ?? visibleSources[0]?.id,
-  );
+  const runtime = typeof window !== "undefined" ? window.__CONTEXT_RAY_RUNTIME__ : null;
+  const api = useMemo(() => createDashboardApi(runtime, injected), [runtime, injected]);
+  const [report, setReport] = useState(injected);
+  const [session, setSession] = useState(runtime);
+  const [agent, setAgent] = useState(injected?.scan.agent ?? "codex");
+  const [target, setTarget] = useState(injected?.scan.target ?? ".");
+  const [task, setTask] = useState(injected?.scan.task ?? "");
+  const [selectedId, setSelectedId] = useState(injected?.sources[0]?.id ?? null);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [showEstimates, setShowEstimates] = useState(true);
   const [view, setView] = useState("blocks");
+  const [groupBy, setGroupBy] = useState("source-type");
   const [expanded, setExpanded] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [scanLabel, setScanLabel] = useState("Jul 13, 2026 · 14:32");
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState("json");
   const [toast, setToast] = useState("");
-  const selected = visibleSources.find((source) => source.id === selectedId) ?? visibleSources[0];
+  const [error, setError] = useState("");
 
-  const selectSource = (id) => {
-    setSelectedId(id);
-    setInspectorOpen(true);
+  useEffect(() => {
+    let active = true;
+    api
+      .session()
+      .then((value) => {
+        if (active && value) setSession(value);
+      })
+      .catch((reason) => {
+        if (active) setError(reason instanceof Error ? reason.message : String(reason));
+      });
+    return () => {
+      active = false;
+    };
+  }, [api]);
+
+  const items = useMemo(() => (report ? reportItems(report) : []), [report]);
+  const selected = items.find((item) => item.id === selectedId) ?? items[0];
+  useEffect(() => {
+    if (items[0] && !items.some((item) => item.id === selectedId)) {
+      setSelectedId(items[0].id);
+    }
+  }, [items, selectedId]);
+
+  const showToast = (message) => {
+    setToast(message);
+    window.setTimeout(() => setToast(""), 2_800);
   };
-  const runScan = () => {
+
+  const runScan = async () => {
     setScanning(true);
-    setToast("");
-    window.setTimeout(() => {
+    setError("");
+    setMoreOpen(false);
+    try {
+      const next = await api.scan({ agent, target, task });
+      setReport(next);
+      setSelectedId(next.sources[0]?.id ?? null);
+      setInspectorOpen(true);
+      showToast(`Real scan complete · ${next.sources.length} sources · ${next.scan.durationMs} ms`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
       setScanning(false);
-      setScanLabel("Just now · 842 ms");
-      setToast("Scan complete · repository evidence refreshed");
-      window.setTimeout(() => setToast(""), 2800);
-    }, 900);
+    }
   };
+
+  const exportReport = async () => {
+    if (!report) return;
+    setError("");
+    try {
+      const result = await api.exportReport(report, exportFormat);
+      showToast(`Export ready${result.fileName ? ` · ${result.fileName}` : ""}`);
+      setMoreOpen(false);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  if (!report) return <EmptyState error={error} />;
+
+  const repositoryCoverage = report.coverage.find((item) => item.area === "repository");
+  const runtimeCoverage = report.coverage.find((item) => item.area === "runtime");
+  const exportFormats = api.mode === "static" ? ["json"] : ["json", "sarif", "markdown", "html"];
+
   return (
     <main className={`app-shell ${inspectorOpen ? "with-inspector" : ""}`}>
       <header className="topbar">
@@ -514,43 +590,100 @@ export function App() {
           <IconSunHigh size={29} stroke={1.4} />
           <strong>Context Ray</strong>
         </div>
-        <label className="context-field">
+        <div className="context-field">
           <span>Repo</span>
-          <select defaultValue="acme/checkout">
-            <option>acme/checkout</option>
-            <option>acme/billing</option>
-          </select>
-        </label>
+          <strong className="context-value" title={session?.root ?? report.scan.root}>
+            {session?.repoLabel ?? report.scan.root}
+          </strong>
+        </div>
         <label className="context-field agent-field">
           <span>Agent</span>
-          <select defaultValue={report.scan.agent}>
-            <option>codex</option>
-            <option>claude</option>
-            <option>cursor</option>
-            <option>copilot</option>
-            <option>gemini</option>
+          <select
+            value={agent}
+            onChange={(event) => setAgent(event.target.value)}
+            disabled={!api.supports.scan}
+          >
+            {(session?.agents ?? AGENTS).map((value) => (
+              <option key={value}>{value}</option>
+            ))}
           </select>
         </label>
         <label className="context-field target-field">
           <span>Target</span>
-          <select defaultValue={report.scan.target}>
-            <option>{report.scan.target}</option>
-            <option>services/checkout/</option>
-            <option>.</option>
+          <select
+            value={target}
+            onChange={(event) => setTarget(event.target.value)}
+            disabled={!api.supports.scan}
+          >
+            {[...new Set([target, ...(session?.targets ?? [report.scan.target])])].map((value) => (
+              <option key={value}>{value}</option>
+            ))}
           </select>
         </label>
         <div className="scan-meta">
-          <span>Scan</span>
-          <strong>{scanLabel}</strong>
+          <span>
+            {api.mode === "server"
+              ? "Local API scan"
+              : api.mode === "vscode"
+                ? "VS Code scan"
+                : "Static report"}
+          </span>
+          <strong>{formatScanLabel(report)}</strong>
         </div>
-        <button className="run-button" onClick={runScan} disabled={scanning}>
+        <button className="run-button" onClick={runScan} disabled={scanning || !api.supports.scan}>
           {scanning ? <IconLoader2 className="spin" size={18} /> : <IconPlayerPlay size={18} />}
-          {scanning ? "Scanning…" : "Run scan"}
+          {scanning ? "Scanning…" : api.supports.scan ? "Run scan" : "Read only"}
         </button>
-        <button className="icon-button more-button" aria-label="More options">
-          •••
+        <button
+          className="icon-button more-button"
+          aria-label="Scan and export options"
+          aria-expanded={moreOpen}
+          onClick={() => setMoreOpen((value) => !value)}
+        >
+          <IconSettings size={19} />
         </button>
+        {moreOpen ? (
+          <div className="settings-popover" role="dialog" aria-label="Scan and export options">
+            <label>
+              Task used for relevance
+              <textarea
+                value={task}
+                onChange={(event) => setTask(event.target.value)}
+                placeholder="Optional task description"
+                disabled={!api.supports.scan}
+              />
+            </label>
+            <small>
+              Backend:{" "}
+              {api.mode === "server"
+                ? "loopback API"
+                : api.mode === "vscode"
+                  ? "VS Code extension host"
+                  : "portable static report"}
+            </small>
+            <div className="export-row">
+              <select
+                value={exportFormat}
+                onChange={(event) => setExportFormat(event.target.value)}
+              >
+                {exportFormats.map((format) => (
+                  <option key={format} value={format}>
+                    {format.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+              <button onClick={exportReport}>
+                <IconDownload size={15} /> Export
+              </button>
+            </div>
+          </div>
+        ) : null}
       </header>
+      {error ? (
+        <div className="error-banner" role="alert">
+          <IconAlertTriangle size={16} /> {error}
+        </div>
+      ) : null}
       <section className="metrics-strip">
         <Metric
           label="Startup context"
@@ -578,16 +711,15 @@ export function App() {
         <Metric label="Coverage">
           <div className="coverage-lines">
             <span>
-              <i />
-              Repository observed
+              <i /> Repository {repositoryCoverage?.status ?? "unknown"}
             </span>
-            <span>Runtime partially observable</span>
+            <span>Runtime {runtimeCoverage?.status ?? "unknown"}</span>
           </div>
         </Metric>
-        <Metric label="Estimates">
+        <Metric label="Evidence">
           <div className="estimate-lines">
-            <span>Static analysis</span>
-            <span>+ schema heuristics</span>
+            <span>{report.summary.activeSources} effective sources</span>
+            <span>{report.findings.length} findings</span>
           </div>
         </Metric>
       </section>
@@ -596,16 +728,16 @@ export function App() {
           <header className="section-heading composition-heading">
             <div>
               <strong>Context composition</strong>
-              <span>(tokens, estimated)</span>
+              <span>(report {report.scan.id})</span>
               <IconInfoCircle size={14} />
             </div>
             <div className="chart-controls">
               <label>
                 Group by:
-                <select>
-                  <option>Source type</option>
-                  <option>Load mode</option>
-                  <option>Relevance</option>
+                <select value={groupBy} onChange={(event) => setGroupBy(event.target.value)}>
+                  <option value="source-type">Source type</option>
+                  <option value="load-mode">Load mode</option>
+                  <option value="relevance">Relevance</option>
                 </select>
                 <IconChevronDown size={14} />
               </label>
@@ -634,43 +766,44 @@ export function App() {
                 />
                 Show estimates
               </label>
-              <IconInfoCircle size={14} />
             </div>
           </header>
           <CompositionChart
-            sources={visibleSources}
-            findings={report.findings}
+            report={report}
+            groupBy={groupBy}
             selectedId={selectedId}
-            onSelect={selectSource}
+            onSelect={(id) => {
+              setSelectedId(id);
+              setInspectorOpen(true);
+            }}
             showEstimates={showEstimates}
             view={view}
-            toolSchemaTokens={report.summary.toolSchemaTokens}
           />
           <SourcesTable
-            sources={visibleSources}
+            report={report}
             selectedId={selectedId}
-            onSelect={selectSource}
+            onSelect={(id) => {
+              setSelectedId(id);
+              setInspectorOpen(true);
+            }}
             expanded={expanded}
             onToggle={() => setExpanded((value) => !value)}
-            totalSourceCount={report.summary.discoveredSources}
           />
         </section>
         {inspectorOpen && selected ? (
           <Inspector
-            key={selected.id}
-            source={selected}
+            key={`${report.scan.id}-${selected.id}`}
+            report={report}
+            item={selected}
+            api={api}
             onClose={() => setInspectorOpen(false)}
-            onModeChange={(mode) => {
-              setToast(`Load mode preview changed to ${mode}`);
-              window.setTimeout(() => setToast(""), 2200);
-            }}
+            onToast={showToast}
           />
         ) : null}
       </div>
       {toast ? (
-        <div className="toast">
-          <IconBolt size={16} />
-          {toast}
+        <div className="toast" role="status">
+          <IconBolt size={16} /> {toast}
         </div>
       ) : null}
     </main>

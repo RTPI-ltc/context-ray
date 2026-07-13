@@ -10,14 +10,14 @@ Coding-agent context now lives across `AGENTS.md`, `CLAUDE.md`, `.cursor/rules`,
 
 ## What works
 
-| Surface         | Capability                                                                                    |
-| --------------- | --------------------------------------------------------------------------------------------- |
-| CLI             | Static scan, terminal/JSON/SARIF/Markdown/HTML output, baselines, report diff, severity gates |
-| Dashboard       | Single-file interactive context profiler; works with demo data or an injected real report     |
-| VS Code         | Findings and sources trees, file diagnostics, rescan-on-save, embedded dashboard              |
-| GitHub Action   | JSON, SARIF, job summary, annotations, configurable failure threshold                         |
-| Runtime wrapper | Explicitly runs a user-supplied command and records process metadata alongside a static scan  |
-| Agent adapters  | Codex, Claude Code, Cursor, GitHub Copilot, Gemini CLI                                        |
+| Surface         | Capability                                                                                     |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| CLI             | Static scan, terminal/JSON/SARIF/Markdown/HTML output, baselines, report diff, severity gates  |
+| Dashboard       | Real loopback scan API, report-driven charts, scenario projection, source preview, and exports |
+| VS Code         | Trees, diagnostics, rescan-on-save, and a Dashboard bridged to the extension host              |
+| GitHub Action   | JSON, SARIF, job summary, annotations, configurable failure threshold                          |
+| Runtime wrapper | Explicitly runs a user-supplied command and records process metadata alongside a static scan   |
+| Agent adapters  | Codex, Claude Code, Cursor, GitHub Copilot, Gemini CLI                                         |
 
 Normal scans never execute repository code or start an MCP server. Runtime observation is a separate explicit command.
 
@@ -30,6 +30,15 @@ corepack enable
 pnpm install
 pnpm context-ray scan fixtures/sample-repo --agent codex --target services/payments
 ```
+
+Run the interactive Dashboard against the same analyzer:
+
+```bash
+pnpm build
+node packages/cli/dist/index.js serve fixtures/sample-repo --agent codex --target services/payments
+```
+
+Open `http://127.0.0.1:4173/`. Changing agent, target, or task and pressing **Run scan** calls the local analyzer; it is not a browser-only simulation. Exported HTML files intentionally remain portable, read-only snapshots. Their filters and inspector are local views over the embedded report, while rescanning, source preview, and scenario projection require `serve` or the VS Code extension host.
 
 Export the same scan in different formats:
 
@@ -70,6 +79,7 @@ context-ray scan [root]
 context-ray compare <before.json> <after.json> [--json]
 context-ray trace --root <path> [options] -- <command...>
 context-ray doctor
+context-ray serve [root] [--agent <agent>] [--target <path>] [--host 127.0.0.1] [--port 4173] [--open]
 ```
 
 Exit code `2` means a configured diagnostic threshold was reached. Other non-zero exits indicate a CLI or runtime error.
@@ -89,6 +99,7 @@ Every finding includes evidence, confidence, a remediation, and optional estimat
 ## Safety and privacy
 
 - Static scans stay inside the resolved repository root and reject symlinks that escape it.
+- The interactive API binds only to loopback and rejects non-loopback `Host` headers.
 - Secret-like evidence is redacted in findings.
 - Project commands and MCP processes are never launched during a static scan.
 - Exact provider prompts and provider-side transforms are reported as not observable.
@@ -117,6 +128,7 @@ extensions/vscode   VS Code extension
 packages/schema      Versioned report types
 packages/core        Discovery, adapters, diagnostics, diff, runtime observation
 packages/reporters   Terminal, JSON, Markdown, SARIF, HTML
+packages/server      Loopback-only Dashboard API and session state
 packages/cli         context-ray executable
 packages/action      Bundled GitHub Action
 fixtures             Cross-agent test repositories

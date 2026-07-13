@@ -1,4 +1,10 @@
-import type { Finding, ReportDiff, ScanReport, Severity } from "@context-ray/schema";
+import type {
+  DashboardRuntime,
+  Finding,
+  ReportDiff,
+  ScanReport,
+  Severity,
+} from "@context-ray/schema";
 
 export interface TerminalOptions {
   color?: boolean;
@@ -211,20 +217,42 @@ export function formatDiff(diff: ReportDiff, color = true): string {
   ].join("\n");
 }
 
-function escapeJsonForScript(report: ScanReport): string {
-  return JSON.stringify(report)
+function escapeJsonForScript(value: unknown): string {
+  return JSON.stringify(value)
     .replaceAll("<", "\\u003c")
     .replaceAll("\u2028", "\\u2028")
     .replaceAll("\u2029", "\\u2029");
 }
 
-export function renderHtml(report: ScanReport, template: string): string {
+export function renderHtml(
+  report: ScanReport,
+  template: string,
+  runtime: DashboardRuntime = {
+    mode: "static",
+    root: report.scan.root,
+    repoLabel: report.scan.root,
+    agents: ["codex", "claude", "cursor", "copilot", "gemini"],
+    targets: [report.scan.target],
+    supports: { scan: false, projection: false, sourcePreview: false, export: true },
+  },
+): string {
   const marker = "window.__CONTEXT_RAY_REPORT__ = null;";
   if (!template.includes(marker)) {
     throw new Error(`HTML template is missing the report marker: ${marker}`);
   }
-  return template.replace(
+  const withReport = template.replace(
     marker,
     `window.__CONTEXT_RAY_REPORT__ = ${escapeJsonForScript(report)};`,
+  );
+  const runtimeMarker = "window.__CONTEXT_RAY_RUNTIME__ = null;";
+  if (!withReport.includes(runtimeMarker)) {
+    if (runtime.mode !== "static") {
+      throw new Error(`HTML template is missing the runtime marker: ${runtimeMarker}`);
+    }
+    return withReport;
+  }
+  return withReport.replace(
+    runtimeMarker,
+    `window.__CONTEXT_RAY_RUNTIME__ = ${escapeJsonForScript(runtime)};`,
   );
 }

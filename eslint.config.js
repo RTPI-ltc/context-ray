@@ -26,8 +26,10 @@ export default tseslint.config(
       sourceType: "module",
       parserOptions: { ecmaFeatures: { jsx: true } },
       globals: {
+        Blob: "readonly",
         document: "readonly",
         fetch: "readonly",
+        URL: "readonly",
         window: "readonly",
       },
     },

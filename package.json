@@ -10,7 +10,7 @@
     "node": ">=20.19"
   },
   "scripts": {
-    "build": "pnpm build:dashboard && pnpm --filter @context-ray/schema build && pnpm --filter @context-ray/core build && pnpm --filter @context-ray/reporters build && pnpm --filter context-ray build && pnpm --filter @context-ray/action build && pnpm --filter context-ray-vscode build",
+    "build": "pnpm build:dashboard && pnpm --filter @context-ray/schema build && pnpm --filter @context-ray/core build && pnpm --filter @context-ray/reporters build && pnpm --filter @context-ray/server build && pnpm --filter context-ray build && pnpm --filter @context-ray/action build && pnpm --filter context-ray-vscode build",
     "build:dashboard": "pnpm --filter @context-ray/dashboard build && node scripts/copy-dashboard-template.mjs",
     "context-ray": "node --conditions=development --import tsx packages/cli/src/index.ts",
     "dev:dashboard": "pnpm --filter @context-ray/dashboard dev",
