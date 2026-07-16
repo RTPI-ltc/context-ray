@@ -205,6 +205,9 @@ importers:
 
   packages/schema:
     devDependencies:
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(postcss@8.5.17)(tsx@4.23.0)(typescript@5.9.3)(yaml@2.9.0)

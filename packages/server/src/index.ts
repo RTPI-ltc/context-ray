@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
-import { analyzeContext, projectLoadMode } from "@context-ray/core";
+import { analyzeContext, projectLoadMode, readTextWithinRoot } from "@context-ray/core";
 import { formatJson, formatMarkdown, formatSarif, renderHtml } from "@context-ray/reporters";
 import type { AgentId, DashboardRuntime, LoadMode, ScanReport } from "@context-ray/schema";
 
@@ -176,12 +176,16 @@ async function sourcePreview(root: string, report: ScanReport, sourceId: string 
     throw new HttpError(404, "Source file no longer exists.");
   }
   if (!isInside(root, resolved)) throw new HttpError(403, "Source symlink escapes the repository.");
-  const content = (await readFile(resolved, "utf8")).slice(0, MAX_PREVIEW_BYTES);
+  const file = await readTextWithinRoot(root, resolved, MAX_PREVIEW_BYTES);
+  if (!file) throw new HttpError(404, "Source file is not readable.");
+  const content = file.content;
   const lines = content.split(/\r?\n/);
   const evidenceLine = report.findings
     .flatMap((finding) => finding.evidence)
     .find((item) => item.sourceId === source.id)?.line;
-  const startLine = Math.max(1, (evidenceLine ?? 1) - 8);
+  const evidenceOutsidePreview =
+    evidenceLine !== undefined && file.truncated && evidenceLine > lines.length;
+  const startLine = Math.max(1, (evidenceOutsidePreview ? 1 : (evidenceLine ?? 1)) - 8);
   const endLine = Math.min(lines.length, startLine + 79);
   return {
     reportId: report.scan.id,
@@ -189,7 +193,12 @@ async function sourcePreview(root: string, report: ScanReport, sourceId: string 
     path: cleanPath,
     startLine,
     endLine,
-    truncated: content.length >= MAX_PREVIEW_BYTES || endLine < lines.length,
+    truncated: file.truncated || endLine < lines.length,
+    ...(evidenceOutsidePreview
+      ? {
+          note: `Evidence at line ${evidenceLine} is outside the bounded preview; showing the file start.`,
+        }
+      : {}),
     content: lines.slice(startLine - 1, endLine).join("\n"),
   };
 }

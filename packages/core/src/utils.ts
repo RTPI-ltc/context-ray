@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, open, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { encode } from "gpt-tokenizer";
 import matter from "gray-matter";
@@ -18,6 +18,15 @@ export interface TextFile {
 
 export function toPosix(value: string): string {
   return value.split(path.sep).join("/");
+}
+
+export function normalizeTarget(root: string, target = "."): string {
+  const normalizedRoot = path.resolve(root);
+  const relative = path.relative(normalizedRoot, path.resolve(normalizedRoot, target));
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Target must stay inside the repository.");
+  }
+  return toPosix(relative) || ".";
 }
 
 export function sourceId(agent: string, kind: string, relativePath: string, suffix = ""): string {
@@ -80,15 +89,32 @@ export async function readTextWithinRoot(
   const relativeToRoot = path.relative(normalizedRoot, resolved);
   if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) return null;
 
-  const buffer = await readFile(resolved);
-  const truncated = buffer.byteLength > maxBytes;
-  const limited = truncated ? buffer.subarray(0, maxBytes) : buffer;
-  const content = limited.toString("utf8");
+  const handle = await open(resolved, "r");
+  let bytes = 0;
+  let content = "";
+  let truncated = false;
+  try {
+    const details = await handle.stat();
+    if (!details.isFile()) return null;
+    bytes = details.size;
+    const limit = Math.max(0, Math.floor(maxBytes));
+    const buffer = Buffer.alloc(Math.min(bytes, limit));
+    let offset = 0;
+    while (offset < buffer.byteLength) {
+      const { bytesRead } = await handle.read(buffer, offset, buffer.byteLength - offset, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    truncated = bytes > offset;
+    content = buffer.subarray(0, offset).toString("utf8");
+  } finally {
+    await handle.close();
+  }
   return {
     absolutePath: resolved,
     relativePath: toPosix(path.relative(normalizedRoot, resolved)),
     content,
-    bytes: buffer.byteLength,
+    bytes,
     lines: content === "" ? 0 : content.split(/\r?\n/).length,
     contentHash: contentHash(content),
     truncated,
@@ -99,12 +125,18 @@ export async function readTextWithinRoot(
 export function parseFrontMatter(content: string): {
   data: Record<string, unknown>;
   body: string;
+  parseError?: string;
 } {
   try {
     const parsed = matter(content);
     return { data: parsed.data as Record<string, unknown>, body: parsed.content };
-  } catch {
-    return { data: {}, body: content };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      data: {},
+      body: content,
+      parseError: message.split(/\r?\n/, 1)[0]?.slice(0, 300) || "Unknown parser error",
+    };
   }
 }
 

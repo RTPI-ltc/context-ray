@@ -1,0 +1,325 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://context-ray.dev/schemas/scan-report-v1.json",
+  "title": "Context Ray ScanReport v1",
+  "description": "The stable report boundary emitted by Context Ray static and explicitly observed runtime scans.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "tool",
+    "scan",
+    "summary",
+    "coverage",
+    "sources",
+    "edges",
+    "findings",
+    "recommendations"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "context-ray" },
+        "version": { "type": "string" }
+      }
+    },
+    "scan": { "$ref": "#/$defs/scan" },
+    "summary": { "$ref": "#/$defs/summary" },
+    "coverage": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/coverageItem" }
+    },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/contextSource" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/contextEdge" }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "recommendations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/recommendation" }
+    },
+    "runtime": { "$ref": "#/$defs/runtimeObservation" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "scan": {
+            "properties": { "mode": { "const": "static+runtime" } },
+            "required": ["mode"]
+          }
+        }
+      },
+      "then": { "required": ["runtime"] }
+    },
+    {
+      "if": {
+        "properties": {
+          "scan": {
+            "properties": { "mode": { "const": "static" } },
+            "required": ["mode"]
+          }
+        }
+      },
+      "then": { "not": { "required": ["runtime"] } }
+    }
+  ],
+  "$defs": {
+    "agentId": {
+      "enum": ["codex", "claude", "cursor", "copilot", "gemini"]
+    },
+    "confidence": {
+      "enum": ["high", "medium", "low"]
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "scan": {
+      "type": "object",
+      "required": ["id", "startedAt", "durationMs", "root", "target", "agent", "mode"],
+      "properties": {
+        "id": { "type": "string" },
+        "startedAt": { "type": "string" },
+        "durationMs": { "$ref": "#/$defs/nonNegativeInteger" },
+        "root": { "type": "string" },
+        "target": { "type": "string" },
+        "agent": { "$ref": "#/$defs/agentId" },
+        "task": { "type": "string" },
+        "mode": { "enum": ["static", "static+runtime"] }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "effectiveTokens",
+        "instructionTokens",
+        "skillTokens",
+        "toolSchemaTokens",
+        "potentialWasteTokens",
+        "conflicts",
+        "highRiskPermissions",
+        "activeSources",
+        "discoveredSources",
+        "mcpServers",
+        "mcpTools"
+      ],
+      "properties": {
+        "effectiveTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "instructionTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "skillTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "toolSchemaTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "potentialWasteTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "conflicts": { "$ref": "#/$defs/nonNegativeInteger" },
+        "highRiskPermissions": { "$ref": "#/$defs/nonNegativeInteger" },
+        "activeSources": { "$ref": "#/$defs/nonNegativeInteger" },
+        "discoveredSources": { "$ref": "#/$defs/nonNegativeInteger" },
+        "mcpServers": { "$ref": "#/$defs/nonNegativeInteger" },
+        "mcpTools": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    },
+    "coverageItem": {
+      "type": "object",
+      "required": ["area", "status", "explanation"],
+      "properties": {
+        "area": {
+          "enum": ["repository", "global-config", "runtime", "internal-prompt", "mcp-tools"]
+        },
+        "status": {
+          "enum": ["complete", "partial", "not-observable", "not-requested"]
+        },
+        "explanation": { "type": "string" }
+      }
+    },
+    "contextSource": {
+      "type": "object",
+      "required": [
+        "id",
+        "label",
+        "path",
+        "kind",
+        "agent",
+        "status",
+        "observability",
+        "confidence",
+        "reason",
+        "tokenEstimate",
+        "bytes",
+        "lines",
+        "contentHash",
+        "relevance"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "path": { "type": "string" },
+        "kind": {
+          "enum": [
+            "instruction",
+            "config",
+            "skill",
+            "mcp-config",
+            "mcp-server",
+            "mcp-tool",
+            "hook",
+            "referenced-file",
+            "runtime"
+          ]
+        },
+        "agent": { "$ref": "#/$defs/agentId" },
+        "status": {
+          "enum": [
+            "active",
+            "conditional",
+            "on-demand",
+            "shadowed",
+            "ignored",
+            "truncated",
+            "unavailable"
+          ]
+        },
+        "observability": { "enum": ["observed", "inferred", "unobservable"] },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "reason": { "type": "string" },
+        "tokenEstimate": { "$ref": "#/$defs/nonNegativeInteger" },
+        "bytes": { "$ref": "#/$defs/nonNegativeInteger" },
+        "lines": { "$ref": "#/$defs/nonNegativeInteger" },
+        "contentHash": { "type": "string" },
+        "relevance": { "enum": ["high", "medium", "low", "unknown"] },
+        "order": { "type": "number" },
+        "patterns": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "serverName": { "type": "string" },
+        "toolName": { "type": "string" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "number" },
+              { "type": "boolean" },
+              {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "contextEdge": {
+      "type": "object",
+      "required": ["from", "to", "kind", "reason"],
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "kind": { "enum": ["loads", "imports", "overrides", "declares", "observes"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["sourceId", "path", "excerpt"],
+      "properties": {
+        "sourceId": { "type": "string" },
+        "path": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "excerpt": { "type": "string" }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "id",
+        "ruleId",
+        "title",
+        "message",
+        "severity",
+        "confidence",
+        "category",
+        "evidence",
+        "recommendation"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "ruleId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "severity": { "enum": ["error", "warning", "note"] },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "category": { "enum": ["conflict", "cost", "security", "quality", "observability"] },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/evidence" }
+        },
+        "recommendation": { "type": "string" },
+        "estimatedSavings": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    },
+    "recommendation": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "description",
+        "confidence",
+        "estimatedTokenSavings",
+        "sourceIds"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "estimatedTokenSavings": { "$ref": "#/$defs/nonNegativeInteger" },
+        "sourceIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "runtimeObservation": {
+      "type": "object",
+      "required": [
+        "command",
+        "startedAt",
+        "durationMs",
+        "exitCode",
+        "signal",
+        "stdoutBytes",
+        "stderrBytes",
+        "note"
+      ],
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "startedAt": { "type": "string" },
+        "durationMs": { "$ref": "#/$defs/nonNegativeInteger" },
+        "exitCode": {
+          "oneOf": [{ "type": "integer" }, { "type": "null" }]
+        },
+        "signal": {
+          "oneOf": [{ "type": "string" }, { "type": "null" }]
+        },
+        "stdoutBytes": { "$ref": "#/$defs/nonNegativeInteger" },
+        "stderrBytes": { "$ref": "#/$defs/nonNegativeInteger" },
+        "note": { "type": "string" }
+      }
+    }
+  }
+}

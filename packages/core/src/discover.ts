@@ -17,6 +17,7 @@ import {
   directoriesBetween,
   estimateTokens,
   matchesAny,
+  normalizeTarget,
   parseFrontMatter,
   readTextWithinRoot,
   relevanceFor,
@@ -252,7 +253,16 @@ function addShadowedSiblings(
   }
 }
 
-function parseCodexConfig(file?: TextFile): { fallbackNames: string[]; maxBytes: number } {
+function parseErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split(/\r?\n/, 1)[0]?.slice(0, 300) || "Unknown parser error";
+}
+
+function parseCodexConfig(file?: TextFile): {
+  fallbackNames: string[];
+  maxBytes: number;
+  parseError?: string;
+} {
   if (!file) return { fallbackNames: [], maxBytes: 32 * 1024 };
   try {
     const parsed = TOML.parse(file.content) as Record<string, unknown>;
@@ -265,26 +275,33 @@ function parseCodexConfig(file?: TextFile): { fallbackNames: string[]; maxBytes:
           ? Math.max(1, configuredMax)
           : 32 * 1024,
     };
-  } catch {
-    return { fallbackNames: [], maxBytes: 32 * 1024 };
+  } catch (error) {
+    return {
+      fallbackNames: [],
+      maxBytes: 32 * 1024,
+      parseError: parseErrorMessage(error),
+    };
   }
 }
 
 function applyCodexAdapter(context: AdapterContext): void {
   const config = context.filesByPath.get(".codex/config.toml");
+  const { fallbackNames, maxBytes, parseError } = parseCodexConfig(config);
   if (config) {
     context.addSource({
       file: config,
       kind: "config",
-      status: "active",
+      status: parseError ? "unavailable" : "active",
       observability: "observed",
       confidence: "high",
-      reason: "Trusted project-scoped Codex configuration",
+      reason: parseError
+        ? "Project-scoped Codex configuration was found but could not be parsed"
+        : "Trusted project-scoped Codex configuration",
       tokenOverride: 0,
+      ...(parseError ? { metadata: { parseError } } : {}),
     });
   }
 
-  const { fallbackNames, maxBytes } = parseCodexConfig(config);
   const candidateNames = ["AGENTS.override.md", "AGENTS.md", ...fallbackNames];
   let consumedBytes = 0;
   let previous: ContextSource | undefined;
@@ -412,22 +429,25 @@ async function applyClaudeAdapter(context: AdapterContext): Promise<void> {
 
   for (const [relative, file] of context.filesByPath) {
     if (relative.startsWith(".claude/rules/") && relative.endsWith(".md")) {
-      const { data } = parseFrontMatter(file.content);
+      const { data, parseError } = parseFrontMatter(file.content);
       const patterns = stringArray(data.paths);
       const active = patterns.length === 0 || matchesAny(context.targetRelative, patterns);
       context.addSource({
         file,
         kind: "instruction",
-        status: active ? "active" : "conditional",
+        status: parseError ? "unavailable" : active ? "active" : "conditional",
         observability: "observed",
-        confidence: "high",
-        reason: active
-          ? patterns.length === 0
-            ? "Claude rule without paths frontmatter loads every session"
-            : "Claude rule path pattern matches the selected target"
-          : "Claude rule is path-scoped and does not match the selected target",
+        confidence: parseError ? "low" : "high",
+        reason: parseError
+          ? "Claude rule frontmatter could not be parsed, so activation is unknown"
+          : active
+            ? patterns.length === 0
+              ? "Claude rule without paths frontmatter loads every session"
+              : "Claude rule path pattern matches the selected target"
+            : "Claude rule is path-scoped and does not match the selected target",
         patterns,
         order: order++,
+        ...(parseError ? { metadata: { parseError } } : {}),
       });
     }
     if (relative.startsWith(".claude/skills/") && relative.endsWith("/SKILL.md")) {
@@ -465,7 +485,7 @@ function applyCursorAdapter(context: AdapterContext): void {
 
   for (const [relative, file] of context.filesByPath) {
     if (relative.startsWith(".cursor/rules/") && /\.(?:md|mdc)$/.test(relative)) {
-      const { data } = parseFrontMatter(file.content);
+      const { data, parseError } = parseFrontMatter(file.content);
       const patterns = stringArray(data.globs);
       const alwaysApply = data.alwaysApply === true;
       const active =
@@ -475,18 +495,21 @@ function applyCursorAdapter(context: AdapterContext): void {
       context.addSource({
         file,
         kind: "instruction",
-        status: active ? "active" : "conditional",
-        observability: agentRequested ? "inferred" : "observed",
-        confidence: agentRequested ? "medium" : "high",
-        reason: active
-          ? alwaysApply
-            ? "Cursor rule declares alwaysApply"
-            : "Cursor rule glob matches the selected target"
-          : agentRequested
-            ? "Agent-requested rule may load when its description matches the task"
-            : "Cursor rule glob does not match the selected target",
+        status: parseError ? "unavailable" : active ? "active" : "conditional",
+        observability: parseError ? "observed" : agentRequested ? "inferred" : "observed",
+        confidence: parseError ? "low" : agentRequested ? "medium" : "high",
+        reason: parseError
+          ? "Cursor rule frontmatter could not be parsed, so activation is unknown"
+          : active
+            ? alwaysApply
+              ? "Cursor rule declares alwaysApply"
+              : "Cursor rule glob matches the selected target"
+            : agentRequested
+              ? "Agent-requested rule may load when its description matches the task"
+              : "Cursor rule glob does not match the selected target",
         patterns,
         order: order++,
+        ...(parseError ? { metadata: { parseError } } : {}),
       });
     }
     if (relative.startsWith(".cursor/skills/") && relative.endsWith("/SKILL.md")) {
@@ -535,47 +558,53 @@ function applyCopilotAdapter(context: AdapterContext): void {
     if (!relative.startsWith(".github/instructions/") || !relative.endsWith(".instructions.md")) {
       continue;
     }
-    const { data } = parseFrontMatter(file.content);
+    const { data, parseError } = parseFrontMatter(file.content);
     const patterns = stringArray(data.applyTo);
     const active = patterns.length > 0 && matchesAny(context.targetRelative, patterns);
     context.addSource({
       file,
       kind: "instruction",
-      status: active ? "active" : "conditional",
+      status: parseError ? "unavailable" : active ? "active" : "conditional",
       observability: "observed",
-      confidence: "high",
-      reason: active
-        ? "Copilot applyTo pattern matches the selected target"
-        : "Copilot path-specific instruction does not match the selected target",
+      confidence: parseError ? "low" : "high",
+      reason: parseError
+        ? "Copilot instruction frontmatter could not be parsed, so activation is unknown"
+        : active
+          ? "Copilot applyTo pattern matches the selected target"
+          : "Copilot path-specific instruction does not match the selected target",
       patterns,
       order: order++,
+      ...(parseError ? { metadata: { parseError } } : {}),
     });
   }
 }
 
-function geminiContextNames(file?: TextFile): string[] {
-  if (!file) return ["GEMINI.md"];
+function geminiContextNames(file?: TextFile): { names: string[]; parseError?: string } {
+  if (!file) return { names: ["GEMINI.md"] };
   try {
     const parsed = JSON.parse(file.content) as { context?: { fileName?: unknown } };
     const configured = stringArray(parsed.context?.fileName);
-    return configured.length > 0 ? configured : ["GEMINI.md"];
-  } catch {
-    return ["GEMINI.md"];
+    return { names: configured.length > 0 ? configured : ["GEMINI.md"] };
+  } catch (error) {
+    return { names: ["GEMINI.md"], parseError: parseErrorMessage(error) };
   }
 }
 
 async function applyGeminiAdapter(context: AdapterContext): Promise<void> {
   const settings = context.filesByPath.get(".gemini/settings.json");
-  const names = geminiContextNames(settings);
+  const { names, parseError } = geminiContextNames(settings);
   if (settings) {
     context.addSource({
       file: settings,
       kind: "config",
-      status: "active",
+      status: parseError ? "unavailable" : "active",
       observability: "observed",
       confidence: "high",
-      reason: "Gemini CLI project settings",
+      reason: parseError
+        ? "Gemini CLI project settings were found but could not be parsed"
+        : "Gemini CLI project settings",
       tokenOverride: 0,
+      ...(parseError ? { metadata: { parseError } } : {}),
     });
   }
   let order = 0;
@@ -611,18 +640,22 @@ async function applyGeminiAdapter(context: AdapterContext): Promise<void> {
   }
 }
 
-function parseStructuredFile(file: TextFile): Record<string, unknown> | null {
+function parseStructuredFile(file: TextFile): {
+  parsed: Record<string, unknown> | null;
+  parseError?: string;
+} {
   try {
     const parsed = file.relativePath.endsWith(".toml")
       ? TOML.parse(file.content)
       : /\.ya?ml$/.test(file.relativePath)
         ? parseYaml(file.content)
         : JSON.parse(file.content);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return { parsed: parsed as Record<string, unknown> };
+    }
+    return { parsed: null, parseError: "Configuration root must be an object" };
+  } catch (error) {
+    return { parsed: null, parseError: parseErrorMessage(error) };
   }
 }
 
@@ -666,8 +699,20 @@ function addMcpSources(context: AdapterContext): void {
   for (const relative of paths) {
     const file = context.filesByPath.get(relative);
     if (!file) continue;
-    const parsed = parseStructuredFile(file);
-    if (!parsed) continue;
+    const { parsed, parseError } = parseStructuredFile(file);
+    if (!parsed) {
+      context.addSource({
+        file,
+        kind: "mcp-config",
+        status: "unavailable",
+        observability: "observed",
+        confidence: "high",
+        reason: "MCP configuration was found but could not be parsed",
+        tokenOverride: 0,
+        metadata: { parseError: parseError ?? "Unknown parser error" },
+      });
+      continue;
+    }
     const configSource = context.addSource({
       file,
       kind: "mcp-config",
@@ -768,9 +813,8 @@ function addHookSources(context: AdapterContext): void {
 
 export async function discoverContext(options: ScanOptions): Promise<DiscoveryResult> {
   const root = path.resolve(options.root);
-  const targetDirectory = await resolveTargetDirectory(root, options.target);
-  const targetRelative =
-    toPosix(path.relative(root, path.resolve(root, options.target ?? "."))) || ".";
+  const targetRelative = normalizeTarget(root, options.target);
+  const targetDirectory = await resolveTargetDirectory(root, targetRelative);
   const directories = directoriesBetween(root, targetDirectory);
   const filesByPath = await readDiscoveredFiles(root, options.maxFileBytes ?? 512_000);
   await addExplicitSnapshots(

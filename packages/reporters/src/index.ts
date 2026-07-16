@@ -202,8 +202,16 @@ export function formatDiff(diff: ReportDiff, color = true): string {
   const signed = (value: number): string => `${value > 0 ? "+" : ""}${value.toLocaleString()}`;
   const goodWhenNegative = (value: number): string =>
     tint(signed(value), value < 0 ? ANSI.green : value > 0 ? ANSI.red : ANSI.dim, color);
+  const severityIncreases = diff.severityChanges.filter(
+    (change) => change.direction === "increased",
+  ).length;
+  const severityDecreases = diff.severityChanges.length - severityIncreases;
+  const comparability = diff.comparability.comparable
+    ? "comparable scope"
+    : `non-comparable scope (${diff.comparability.scopeDifferences.join(", ")})`;
   return [
     `${tint("CONTEXT RAY DIFF", ANSI.bold + ANSI.cyan, color)}  ${diff.before.scan.id} → ${diff.after.scan.id}`,
+    comparability,
     "",
     `effective tokens  ${goodWhenNegative(diff.deltas.effectiveTokens)}`,
     `tool schemas     ${goodWhenNegative(diff.deltas.toolSchemaTokens)}`,
@@ -211,8 +219,9 @@ export function formatDiff(diff: ReportDiff, color = true): string {
     `high-risk        ${goodWhenNegative(diff.deltas.highRiskPermissions)}`,
     `sources          ${signed(diff.deltas.sources)}`,
     "",
-    `${diff.addedSourceIds.length} sources added · ${diff.removedSourceIds.length} removed`,
+    `${diff.addedSourceIds.length} sources added · ${diff.removedSourceIds.length} removed · ${diff.changedSources.length} changed`,
     `${diff.addedFindingIds.length} findings added · ${diff.resolvedFindingIds.length} resolved`,
+    `${severityIncreases} severity increased · ${severityDecreases} decreased`,
     "",
   ].join("\n");
 }

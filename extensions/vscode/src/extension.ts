@@ -1,7 +1,7 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import * as vscode from "vscode";
-import { analyzeContext, projectLoadMode } from "@context-ray/core";
+import { analyzeContext, projectLoadMode, readTextWithinRoot } from "@context-ray/core";
 import type {
   AgentId,
   ContextSource,
@@ -17,9 +17,25 @@ import {
   formatTerminal,
   renderHtml,
 } from "@context-ray/reporters";
+import { createDebouncedTrigger, LatestRequestGate } from "./scan-coordinator.js";
 
 const AGENTS: AgentId[] = ["codex", "claude", "cursor", "copilot", "gemini"];
 const MAX_PREVIEW_BYTES = 128 * 1024;
+const SCAN_ON_SAVE_DEBOUNCE_MS = 300;
+
+interface ResolvedScanInput {
+  root: string;
+  agent: AgentId;
+  target: string;
+  task?: string;
+}
+
+class ScanSupersededError extends Error {
+  constructor() {
+    super("Scan superseded by a newer request.");
+    this.name = "ScanSupersededError";
+  }
+}
 
 class ReportState {
   report: ScanReport | undefined;
@@ -211,12 +227,16 @@ async function sourcePreview(report: ScanReport, sourceId: string) {
   if (!isInside(resolvedRoot, candidate)) throw new Error("Source must stay inside the workspace.");
   const resolved = await realpath(candidate);
   if (!isInside(resolvedRoot, resolved)) throw new Error("Source symlink escapes the workspace.");
-  const content = (await readFile(resolved, "utf8")).slice(0, MAX_PREVIEW_BYTES);
+  const file = await readTextWithinRoot(resolvedRoot, resolved, MAX_PREVIEW_BYTES);
+  if (!file) throw new Error("Source file is not readable.");
+  const content = file.content;
   const lines = content.split(/\r?\n/);
   const evidenceLine = report.findings
     .flatMap((finding) => finding.evidence)
     .find((evidence) => evidence.sourceId === source.id)?.line;
-  const startLine = Math.max(1, (evidenceLine ?? 1) - 8);
+  const evidenceOutsidePreview =
+    evidenceLine !== undefined && file.truncated && evidenceLine > lines.length;
+  const startLine = Math.max(1, (evidenceOutsidePreview ? 1 : (evidenceLine ?? 1)) - 8);
   const endLine = Math.min(lines.length, startLine + 79);
   return {
     reportId: report.scan.id,
@@ -224,7 +244,12 @@ async function sourcePreview(report: ScanReport, sourceId: string) {
     path: cleanPath,
     startLine,
     endLine,
-    truncated: content.length >= MAX_PREVIEW_BYTES || endLine < lines.length,
+    truncated: file.truncated || endLine < lines.length,
+    ...(evidenceOutsidePreview
+      ? {
+          note: `Evidence at line ${evidenceLine} is outside the bounded preview; showing the file start.`,
+        }
+      : {}),
     content: lines.slice(startLine - 1, endLine).join("\n"),
   };
 }
@@ -245,12 +270,55 @@ export function activate(context: vscode.ExtensionContext): void {
   const state = new ReportState();
   const output = vscode.window.createOutputChannel("Context Ray");
   const diagnostics = vscode.languages.createDiagnosticCollection("context-ray");
+  const scanGate = new LatestRequestGate();
+  let reportPanel: vscode.WebviewPanel | undefined;
+  let reportPanelDisposables: vscode.Disposable[] = [];
+  let cancelPendingRescan = (): void => undefined;
+  let scheduleQueuedRescan = (): void => undefined;
+  let scansInFlight = 0;
+  let automaticRescanQueued = false;
+  let latestScanInput: ResolvedScanInput | undefined;
+
+  const clearPanelSubscriptions = (): void => {
+    const subscriptions = reportPanelDisposables.splice(0);
+    for (const subscription of subscriptions) subscription.dispose();
+  };
+
+  const publishReportToPanel = (report: ScanReport): void => {
+    const panel = reportPanel;
+    if (!panel) return;
+    panel.title = `Context Ray · ${report.scan.agent}`;
+    void panel.webview
+      .postMessage({
+        type: "context-ray/report",
+        payload: report,
+        runtime: dashboardRuntime(report),
+      })
+      .then(undefined, () => undefined);
+  };
+
+  const commitReport = (report: ScanReport): void => {
+    state.update(report);
+    updateDiagnostics(report, diagnostics);
+    output.clear();
+    output.append(formatTerminal(report, { color: false }));
+    publishReportToPanel(report);
+  };
+
   context.subscriptions.push(
     output,
     diagnostics,
     state.emitter,
     vscode.window.registerTreeDataProvider("contextRay.findings", new FindingProvider(state)),
     vscode.window.registerTreeDataProvider("contextRay.sources", new SourceProvider(state)),
+    {
+      dispose(): void {
+        const panel = reportPanel;
+        reportPanel = undefined;
+        clearPanelSubscriptions();
+        panel?.dispose();
+      },
+    },
   );
 
   const executeScan = async (
@@ -261,38 +329,53 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!root) throw new Error("Open a workspace before running Context Ray.");
     const agent = typeof input.agent === "string" ? input.agent : configuredAgent();
     if (!AGENTS.includes(agent as AgentId)) throw new Error("Unsupported agent.");
-    const target = await validatedTarget(root, input.target, activeTarget(root));
-    const task = typeof input.task === "string" ? input.task.trim().slice(0, 2_000) : "";
-    return await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Window,
-        title: "Context Ray: analyzing effective context",
-      },
-      async () => {
-        const report = await analyzeContext({
-          root,
-          agent: agent as AgentId,
-          target,
-          ...(task ? { task } : {}),
-        });
-        state.update(report);
-        updateDiagnostics(report, diagnostics);
-        output.clear();
-        output.append(formatTerminal(report, { color: false }));
-        if (notify) {
-          void vscode.window.showInformationMessage(
-            `Context Ray: ${report.summary.effectiveTokens.toLocaleString()} tokens, ${report.findings.length} findings`,
-          );
-        }
-        return report;
-      },
-    );
+    const generation = scanGate.begin();
+    scansInFlight += 1;
+    try {
+      const target = await validatedTarget(root, input.target, activeTarget(root));
+      if (!scanGate.isCurrent(generation)) throw new ScanSupersededError();
+      const task = typeof input.task === "string" ? input.task.trim().slice(0, 2_000) : "";
+      const resolvedInput: ResolvedScanInput = {
+        root,
+        agent: agent as AgentId,
+        target,
+        ...(task ? { task } : {}),
+      };
+      latestScanInput = resolvedInput;
+      return await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Window,
+          title: "Context Ray: analyzing effective context",
+        },
+        async () => {
+          const report = await analyzeContext(resolvedInput);
+          if (!scanGate.isCurrent(generation)) throw new ScanSupersededError();
+          commitReport(report);
+          if (notify) {
+            void vscode.window.showInformationMessage(
+              `Context Ray: ${report.summary.effectiveTokens.toLocaleString()} tokens, ${report.findings.length} findings`,
+            );
+          }
+          return report;
+        },
+      );
+    } finally {
+      scansInFlight -= 1;
+      if (scansInFlight === 0 && automaticRescanQueued) {
+        automaticRescanQueued = false;
+        scheduleQueuedRescan();
+      }
+    }
   };
 
-  const scan = async (notify = true): Promise<ScanReport | undefined> => {
+  const scan = async (
+    notify = true,
+    input: { root?: string; agent?: unknown; target?: unknown; task?: unknown } = {},
+  ): Promise<ScanReport | undefined> => {
     try {
-      return await executeScan({}, notify);
+      return await executeScan(input, notify);
     } catch (error) {
+      if (error instanceof ScanSupersededError) return undefined;
       const message = error instanceof Error ? error.message : String(error);
       output.appendLine(message);
       if (notify) void vscode.window.showErrorMessage(`Context Ray scan failed: ${message}`);
@@ -300,130 +383,206 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const requireActiveReport = (reportId: unknown): ScanReport => {
+    const report = state.report;
+    if (!report) throw new Error("No active report.");
+    if (reportId !== report.scan.id) throw new Error("Report is no longer active.");
+    return report;
+  };
+
+  const handlePanelMessage = async (
+    panel: vscode.WebviewPanel,
+    template: string,
+    message: Record<string, unknown>,
+  ): Promise<void> => {
+    if (message.type === "context-ray/ready") {
+      if (reportPanel === panel && state.report) publishReportToPanel(state.report);
+      return;
+    }
+    const requestId = typeof message.requestId === "string" ? message.requestId : undefined;
+    if (!requestId || typeof message.type !== "string") return;
+    const reply = async (payload?: unknown, error?: string): Promise<void> => {
+      await panel.webview.postMessage({
+        type: "context-ray/response",
+        requestId,
+        ...(error ? { error } : { payload }),
+      });
+    };
+
+    try {
+      if (message.type === "context-ray/scan") {
+        cancelPendingRescan();
+        const activeReport = state.report;
+        if (!activeReport) throw new Error("No active report.");
+        const input =
+          message.input && typeof message.input === "object"
+            ? (message.input as Record<string, unknown>)
+            : {};
+        const next = await executeScan(
+          {
+            root: activeReport.scan.root,
+            agent: input.agent,
+            target: input.target,
+            task: input.task,
+          },
+          false,
+        );
+        await reply(next);
+        return;
+      }
+      if (message.type === "context-ray/project") {
+        const input =
+          message.input && typeof message.input === "object"
+            ? (message.input as Record<string, unknown>)
+            : {};
+        const activeReport = requireActiveReport(input.reportId);
+        if (typeof input.sourceId !== "string") throw new Error("sourceId is required.");
+        if (input.mode !== "eager" && input.mode !== "progressive" && input.mode !== "on-demand") {
+          throw new Error("Unsupported load mode.");
+        }
+        await reply(projectLoadMode(activeReport, input.sourceId, input.mode as LoadMode));
+        return;
+      }
+      if (message.type === "context-ray/source-preview") {
+        const activeReport = requireActiveReport(message.reportId);
+        if (typeof message.sourceId !== "string") throw new Error("sourceId is required.");
+        const preview = await sourcePreview(activeReport, message.sourceId);
+        requireActiveReport(activeReport.scan.id);
+        await reply(preview);
+        return;
+      }
+      if (message.type === "context-ray/export") {
+        const activeReport = requireActiveReport(message.reportId);
+        const format = typeof message.format === "string" ? message.format : "json";
+        const exported = exportContent(activeReport, template, format);
+        const destination = await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.file(
+            path.join(activeReport.scan.root, `context-ray-report.${exported.extension}`),
+          ),
+          saveLabel: "Export Context Ray report",
+        });
+        if (!destination) {
+          await reply({ saved: false });
+          return;
+        }
+        requireActiveReport(activeReport.scan.id);
+        await vscode.workspace.fs.writeFile(destination, Buffer.from(exported.content, "utf8"));
+        await reply({ saved: true, fileName: path.basename(destination.fsPath) });
+        return;
+      }
+      throw new Error("Unsupported Dashboard request.");
+    } catch (error) {
+      await reply(undefined, error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const openReport = async (): Promise<void> => {
+    let report = state.report;
+    if (!report) {
+      cancelPendingRescan();
+      report = await scan(false);
+    }
+    if (!report) return;
+    if (reportPanel) {
+      reportPanel.reveal(vscode.ViewColumn.Beside);
+      publishReportToPanel(state.report ?? report);
+      return;
+    }
+
+    let createdPanel: vscode.WebviewPanel | undefined;
+    try {
+      const template = await readFile(
+        vscode.Uri.joinPath(context.extensionUri, "media", "dashboard.html").fsPath,
+        "utf8",
+      );
+      const existingPanel = reportPanel as vscode.WebviewPanel | undefined;
+      if (existingPanel) {
+        existingPanel.reveal(vscode.ViewColumn.Beside);
+        publishReportToPanel(state.report ?? report);
+        return;
+      }
+
+      const activeReport = state.report ?? report;
+      const panel = vscode.window.createWebviewPanel(
+        "contextRayReport",
+        `Context Ray · ${activeReport.scan.agent}`,
+        vscode.ViewColumn.Beside,
+        { enableScripts: true, retainContextWhenHidden: true },
+      );
+      createdPanel = panel;
+      reportPanel = panel;
+      const messageSubscription = panel.webview.onDidReceiveMessage(
+        async (message: Record<string, unknown>) => {
+          await handlePanelMessage(panel, template, message);
+        },
+      );
+      const disposeSubscription = panel.onDidDispose(() => {
+        if (reportPanel !== panel) return;
+        reportPanel = undefined;
+        clearPanelSubscriptions();
+      });
+      reportPanelDisposables = [messageSubscription, disposeSubscription];
+      panel.webview.html = renderHtml(activeReport, template, dashboardRuntime(activeReport));
+    } catch (error) {
+      if (createdPanel && reportPanel === createdPanel) {
+        reportPanel = undefined;
+        clearPanelSubscriptions();
+        createdPanel.dispose();
+      }
+      output.appendLine(error instanceof Error ? error.message : String(error));
+      void vscode.window.showErrorMessage(
+        "Dashboard asset is missing. Build the workspace before opening the report.",
+      );
+    }
+  };
+
   context.subscriptions.push(
     vscode.commands.registerCommand("contextRay.scan", async () => {
+      cancelPendingRescan();
       await scan(true);
     }),
     vscode.commands.registerCommand("contextRay.openReport", async () => {
-      const report = state.report ?? (await scan(false));
-      if (!report) return;
-      try {
-        const template = await readFile(
-          vscode.Uri.joinPath(context.extensionUri, "media", "dashboard.html").fsPath,
-          "utf8",
-        );
-        const panel = vscode.window.createWebviewPanel(
-          "contextRayReport",
-          `Context Ray · ${report.scan.agent}`,
-          vscode.ViewColumn.Beside,
-          { enableScripts: true, retainContextWhenHidden: true },
-        );
-        panel.webview.html = renderHtml(report, template, dashboardRuntime(report));
-        panel.webview.onDidReceiveMessage(
-          async (message: Record<string, unknown>) => {
-            const requestId = typeof message.requestId === "string" ? message.requestId : undefined;
-            if (!requestId || typeof message.type !== "string") return;
-            const reply = async (payload?: unknown, error?: string): Promise<void> => {
-              await panel.webview.postMessage({
-                type: "context-ray/response",
-                requestId,
-                ...(error ? { error } : { payload }),
-              });
-            };
-            try {
-              const activeReport = state.report;
-              if (!activeReport) throw new Error("No active report.");
-              if (message.type === "context-ray/scan") {
-                const input =
-                  message.input && typeof message.input === "object"
-                    ? (message.input as Record<string, unknown>)
-                    : {};
-                const next = await executeScan(
-                  {
-                    root: activeReport.scan.root,
-                    agent: input.agent,
-                    target: input.target,
-                    task: input.task,
-                  },
-                  false,
-                );
-                panel.title = `Context Ray · ${next.scan.agent}`;
-                await reply(next);
-                return;
-              }
-              if (message.type === "context-ray/project") {
-                const input =
-                  message.input && typeof message.input === "object"
-                    ? (message.input as Record<string, unknown>)
-                    : {};
-                if (input.reportId !== activeReport.scan.id)
-                  throw new Error("Report is no longer active.");
-                if (typeof input.sourceId !== "string") throw new Error("sourceId is required.");
-                if (
-                  input.mode !== "eager" &&
-                  input.mode !== "progressive" &&
-                  input.mode !== "on-demand"
-                ) {
-                  throw new Error("Unsupported load mode.");
-                }
-                await reply(projectLoadMode(activeReport, input.sourceId, input.mode as LoadMode));
-                return;
-              }
-              if (message.type === "context-ray/source-preview") {
-                if (message.reportId !== activeReport.scan.id)
-                  throw new Error("Report is no longer active.");
-                if (typeof message.sourceId !== "string") throw new Error("sourceId is required.");
-                await reply(await sourcePreview(activeReport, message.sourceId));
-                return;
-              }
-              if (message.type === "context-ray/export") {
-                if (message.reportId !== activeReport.scan.id)
-                  throw new Error("Report is no longer active.");
-                const format = typeof message.format === "string" ? message.format : "json";
-                const exported = exportContent(activeReport, template, format);
-                const destination = await vscode.window.showSaveDialog({
-                  defaultUri: vscode.Uri.file(
-                    path.join(activeReport.scan.root, `context-ray-report.${exported.extension}`),
-                  ),
-                  saveLabel: "Export Context Ray report",
-                });
-                if (!destination) {
-                  await reply({ saved: false });
-                  return;
-                }
-                await vscode.workspace.fs.writeFile(
-                  destination,
-                  Buffer.from(exported.content, "utf8"),
-                );
-                await reply({ saved: true, fileName: path.basename(destination.fsPath) });
-                return;
-              }
-              throw new Error("Unsupported Dashboard request.");
-            } catch (error) {
-              await reply(undefined, error instanceof Error ? error.message : String(error));
-            }
-          },
-          undefined,
-          context.subscriptions,
-        );
-      } catch {
-        void vscode.window.showErrorMessage(
-          "Dashboard asset is missing. Build the workspace before opening the report.",
-        );
-      }
+      await openReport();
     }),
   );
 
   const watcher = vscode.workspace.createFileSystemWatcher(
     "**/{AGENTS.md,AGENTS.override.md,CLAUDE.md,CLAUDE.local.md,GEMINI.md,*.mdc,*.instructions.md,SKILL.md,.mcp.json,context-ray.mcp.json,mcp.json,settings.json,settings.local.json,config.toml,hooks.json}",
   );
-  const rescan = (): void => {
-    if (vscode.workspace.getConfiguration("contextRay").get("scanOnSave", true)) void scan(false);
+  const debouncedRescan = createDebouncedTrigger(() => {
+    if (vscode.workspace.getConfiguration("contextRay").get("scanOnSave", true)) {
+      if (scansInFlight > 0) {
+        automaticRescanQueued = true;
+        return;
+      }
+      const activeReport = state.report;
+      const input =
+        latestScanInput ??
+        (activeReport
+          ? {
+              root: activeReport.scan.root,
+              agent: activeReport.scan.agent,
+              target: activeReport.scan.target,
+              ...(activeReport.scan.task ? { task: activeReport.scan.task } : {}),
+            }
+          : {});
+      void scan(false, input);
+    }
+  }, SCAN_ON_SAVE_DEBOUNCE_MS);
+  scheduleQueuedRescan = () => debouncedRescan.trigger();
+  cancelPendingRescan = () => {
+    automaticRescanQueued = false;
+    debouncedRescan.dispose();
   };
-  watcher.onDidChange(rescan, undefined, context.subscriptions);
-  watcher.onDidCreate(rescan, undefined, context.subscriptions);
-  watcher.onDidDelete(rescan, undefined, context.subscriptions);
-  context.subscriptions.push(watcher);
+  const scheduleRescan = (): void => {
+    if (vscode.workspace.getConfiguration("contextRay").get("scanOnSave", true)) {
+      debouncedRescan.trigger();
+    }
+  };
+  watcher.onDidChange(scheduleRescan, undefined, context.subscriptions);
+  watcher.onDidCreate(scheduleRescan, undefined, context.subscriptions);
+  watcher.onDidDelete(scheduleRescan, undefined, context.subscriptions);
+  context.subscriptions.push(watcher, { dispose: () => debouncedRescan.dispose() });
   void scan(false);
 }
 

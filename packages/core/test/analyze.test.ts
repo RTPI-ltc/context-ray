@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { analyzeContext, compareReports, discoverContext } from "../src/index.js";
+import { analyzeContext, compareReports, discoverContext, isScanReport } from "../src/index.js";
 
 const fixture = path.resolve("fixtures/sample-repo");
 const target = "services/payments";
@@ -18,6 +18,17 @@ describe("Context Ray adapters", () => {
     expect(report.findings.map((finding) => finding.ruleId)).toContain("conflict/node-version");
     expect(report.findings.map((finding) => finding.ruleId)).toContain("mcp/unpinned-package");
     expect(report.summary.mcpTools).toBe(2);
+    expect(isScanReport(report)).toBe(true);
+    expect(
+      report.findings
+        .filter((finding) => finding.estimatedSavings !== undefined)
+        .every((finding) => Number.isInteger(finding.estimatedSavings)),
+    ).toBe(true);
+    expect(
+      report.recommendations.every((recommendation) =>
+        Number.isInteger(recommendation.estimatedTokenSavings),
+      ),
+    ).toBe(true);
     expect(report.coverage.find((item) => item.area === "internal-prompt")?.status).toBe(
       "not-observable",
     );
@@ -81,5 +92,23 @@ describe("report comparison", () => {
     expect(repeated.scan.id).toBe(first.scan.id);
     expect(otherTask.scan.id).not.toBe(first.scan.id);
     expect(first.scan.task).toBe("review payments");
+  });
+
+  it("normalizes equivalent target paths for stable baseline comparability", async () => {
+    const plain = await analyzeContext({ root: fixture, target, agent: "codex" });
+    const dotted = await analyzeContext({ root: fixture, target: `./${target}`, agent: "codex" });
+
+    expect(dotted.scan.target).toBe(target);
+    expect(dotted.scan.id).toBe(plain.scan.id);
+    expect(compareReports(plain, dotted).comparability).toEqual({
+      comparable: true,
+      scopeDifferences: [],
+    });
+  });
+
+  it("rejects targets outside the repository boundary", async () => {
+    await expect(analyzeContext({ root: fixture, target: "../", agent: "codex" })).rejects.toThrow(
+      "Target must stay inside the repository",
+    );
   });
 });

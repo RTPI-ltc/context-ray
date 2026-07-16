@@ -14,9 +14,11 @@ The Dashboard is one report renderer with three explicit runtime modes. It never
 - `GET /api/session`: root label, supported agents, discovered targets, and capability flags;
 - `POST /api/scan`: validated agent, repository-contained target, and optional bounded task text;
 - `POST /api/project`: deterministic load-mode scenario for one source in a retained report;
-- `GET /api/source-preview`: bounded excerpt for a source already present in that report;
+- `GET /api/source-preview`: byte-bounded excerpt for a source already present
+  in that report; if finding evidence falls outside the window, the response
+  explicitly notes that it is showing the file start;
 - `GET /api/export`: JSON, SARIF, Markdown, or portable static HTML.
 
 The charts, metrics, source table, findings, recommendations, references, and coverage labels are derived from the returned schema v1 report. Grouping, compact/list view, inspector selection, and estimate visibility are client-side presentations of that report; they do not claim to mutate backend configuration.
 
-The scenario endpoint is analytical only. Its response includes `mutatesConfiguration: false`, current and requested load modes, contribution delta, projected startup tokens, confidence, and an explanation. Configuration editing remains out of scope for version 0.1.
+The scenario endpoint is analytical only. Its response includes `mutatesConfiguration: false`, current and requested load modes, contribution delta, projected startup tokens, confidence, and an explanation. Conditional sources report `conditional` with zero current contribution for the selected target; shadowed, ignored, or unavailable sources report `excluded`. Projections can then show the cost of making either class eager or progressive without claiming that it already contributes startup tokens. Configuration editing remains out of scope for version 0.1.

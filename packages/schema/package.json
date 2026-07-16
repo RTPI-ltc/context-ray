@@ -11,16 +11,19 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
-    }
+    },
+    "./scan-report.schema.json": "./scan-report.schema.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "scan-report.schema.json"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
+    "ajv": "^8.20.0",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3"
   }

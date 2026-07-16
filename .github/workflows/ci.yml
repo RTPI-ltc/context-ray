@@ -10,10 +10,11 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: [20.19.0, 22]
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +25,9 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
+      - name: Verify tracked Action bundle is current
+        if: runner.os == 'Linux' && matrix.node == '20.19.0'
+        run: git diff --exit-code -- packages/action/dist/index.cjs
 
   self-scan:
     runs-on: ubuntu-latest
@@ -41,3 +45,24 @@ jobs:
         with:
           name: context-ray-sarif
           path: .context-ray/report.sarif
+
+  action-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: context-ray
+        uses: ./
+        with:
+          root: fixtures/sample-repo
+          target: services/payments
+          agent: codex
+          fail-on: none
+          output-directory: .context-ray-action
+      - name: Verify packaged Action outputs
+        shell: bash
+        run: |
+          test -s fixtures/sample-repo/.context-ray-action/report.json
+          test -s fixtures/sample-repo/.context-ray-action/report.sarif
+          test -s fixtures/sample-repo/.context-ray-action/summary.md
+          test -n "${{ steps.context-ray.outputs.effective-tokens }}"
+          test -n "${{ steps.context-ray.outputs.report }}"

@@ -17,6 +17,12 @@ inputs:
   fail-on:
     description: none, note, warning, or error
     default: error
+  baseline:
+    description: Optional Context Ray JSON report path, resolved from root
+    required: false
+  fail-on-new:
+    description: With baseline, replace fail-on and gate only added findings or severity increases
+    default: none
   output-directory:
     description: Directory for generated reports
     default: .context-ray
@@ -31,6 +37,10 @@ outputs:
     description: Estimated removable context tokens
   conflicts:
     description: Number of policy conflicts
+  new-findings:
+    description: Number of findings introduced since the baseline
+  resolved-findings:
+    description: Number of findings resolved since the baseline
 runs:
   using: node20
   main: packages/action/dist/index.cjs

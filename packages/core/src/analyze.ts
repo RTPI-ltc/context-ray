@@ -13,7 +13,7 @@ import type {
 } from "@context-ray/schema";
 import { REPORT_SCHEMA_VERSION } from "@context-ray/schema";
 import { discoverContext } from "./discover.js";
-import { lineExcerpt } from "./utils.js";
+import { lineExcerpt, normalizeTarget } from "./utils.js";
 
 const TOOL_VERSION = "0.1.0";
 const EFFECTIVE_STATUSES = new Set(["active", "truncated"]);
@@ -31,10 +31,9 @@ interface FindingInput {
 }
 
 function findingId(input: FindingInput): string {
+  const stableSourceIds = [...new Set(input.evidence.map((item) => item.sourceId))].sort();
   return createHash("sha256")
-    .update(
-      `${input.ruleId}:${input.evidence.map((item) => `${item.sourceId}:${item.line ?? 0}`).join(":")}`,
-    )
+    .update(`${input.ruleId}:${stableSourceIds.join(":")}`)
     .digest("hex")
     .slice(0, 16);
 }
@@ -87,6 +86,30 @@ function jaccard(left: Set<string>, right: Set<string>): number {
 function analyzeSingleSource(source: ContextSource, content: string): Finding[] {
   const findings: Finding[] = [];
   const active = EFFECTIVE_STATUSES.has(source.status);
+  const parseError = source.metadata?.parseError;
+
+  if (typeof parseError === "string") {
+    findings.push(
+      makeFinding({
+        ruleId: "quality/config-parse-error",
+        title: "Configuration could not be parsed",
+        message: `${source.path} could not be parsed, so adapter defaults may apply and declarations may be missing.`,
+        severity: "warning",
+        confidence: "high",
+        category: "quality",
+        evidence: [
+          {
+            sourceId: source.id,
+            path: source.path,
+            line: 1,
+            excerpt: `Parser error: ${parseError}`,
+          },
+        ],
+        recommendation:
+          "Fix the configuration syntax and rescan before trusting this adapter result.",
+      }),
+    );
+  }
 
   if (
     active &&
@@ -450,7 +473,8 @@ export async function analyzeContext(options: ScanOptions): Promise<ScanReport> 
   const started = performance.now();
   const startedAt = new Date().toISOString();
   const root = path.resolve(options.root);
-  const discovery = await discoverContext({ ...options, root });
+  const target = normalizeTarget(root, options.target);
+  const discovery = await discoverContext({ ...options, root, target });
   const findings = [
     ...discovery.sources.flatMap((source) =>
       analyzeSingleSource(source, discovery.contents.get(source.id) ?? ""),
@@ -468,7 +492,7 @@ export async function analyzeContext(options: ScanOptions): Promise<ScanReport> 
   );
   const reportId = createHash("sha256")
     .update(
-      `${root}:${options.agent}:${options.target ?? "."}:${options.task ?? ""}:${discovery.sources.map((source) => source.contentHash).join(":")}`,
+      `${root}:${options.agent}:${target}:${options.task ?? ""}:${discovery.sources.map((source) => source.contentHash).join(":")}`,
     )
     .digest("hex")
     .slice(0, 16);
@@ -481,7 +505,7 @@ export async function analyzeContext(options: ScanOptions): Promise<ScanReport> 
       startedAt,
       durationMs: Math.round(performance.now() - started),
       root,
-      target: options.target ?? ".",
+      target,
       agent: options.agent,
       ...(options.task ? { task: options.task } : {}),
       mode: options.runtime ? "static+runtime" : "static",

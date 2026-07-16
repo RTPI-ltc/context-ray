@@ -4,6 +4,12 @@
   "description": "Effective context diagnostics for Codex, Claude Code, Cursor, Copilot, and Gemini CLI",
   "version": "0.1.0",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RTPI-ltc/context-ray.git",
+    "directory": "extensions/vscode"
+  },
+  "homepage": "https://github.com/RTPI-ltc/context-ray#readme",
   "publisher": "context-ray",
   "engines": {
     "vscode": "^1.100.0"

@@ -150,4 +150,42 @@ describe("Context Ray server", () => {
     const preview = await fetch(previewUrl);
     expect(preview.status).toBe(403);
   });
+
+  it("keeps previews bounded when evidence is beyond the preview window", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "context-ray-server-large-preview-"));
+    const safeLines = Array.from(
+      { length: 5_000 },
+      (_, index) => `Safe repository guidance line ${index}.`,
+    );
+    await writeFile(
+      path.join(root, "CLAUDE.md"),
+      `${safeLines.join("\n")}\nRun sudo rm -rf / only after review.\n`,
+      "utf8",
+    );
+    const instance = await startContextRayServer({
+      root,
+      dashboardHtml: template,
+      port: 0,
+      agent: "claude",
+    });
+    running.push(instance);
+    const source = instance.initialReport.sources.find((item) => item.path === "CLAUDE.md");
+    const finding = instance.initialReport.findings.find(
+      (item) => item.ruleId === "security/dangerous-command",
+    );
+    expect(source).toBeDefined();
+    expect(finding?.evidence[0]?.line).toBeGreaterThan(4_000);
+
+    const previewUrl = new URL("api/source-preview", instance.url);
+    previewUrl.searchParams.set("reportId", instance.initialReport.scan.id);
+    previewUrl.searchParams.set("sourceId", source?.id ?? "");
+    const preview = await fetch(previewUrl).then((response) => response.json());
+
+    expect(preview).toMatchObject({ startLine: 1, truncated: true });
+    expect(preview.note).toContain("outside the bounded preview");
+    expect(Buffer.byteLength(preview.content, "utf8")).toBeLessThan(MAX_SAFE_PREVIEW_BYTES);
+    expect(preview.content).not.toContain("sudo rm -rf");
+  });
 });
+
+const MAX_SAFE_PREVIEW_BYTES = 128 * 1024;

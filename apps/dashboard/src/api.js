@@ -1,14 +1,30 @@
 let sequence = 0;
 const pending = new Map();
+const reportListeners = new Set();
+
+function isReportPayload(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    typeof value.scan?.id === "string" &&
+    Array.isArray(value.sources) &&
+    Array.isArray(value.findings)
+  );
+}
 
 if (typeof window !== "undefined") {
   window.addEventListener("message", (event) => {
     const message = event.data;
-    if (!message || message.type !== "context-ray/response" || !message.requestId) return;
+    if (!message || typeof message !== "object") return;
+    if (message.type === "context-ray/report" && isReportPayload(message.payload)) {
+      reportListeners.forEach((listener) => listener(message.payload, message.runtime));
+      return;
+    }
+    if (message.type !== "context-ray/response" || !message.requestId) return;
     const request = pending.get(message.requestId);
     if (!request) return;
     pending.delete(message.requestId);
-    window.clearTimeout(request.timer);
+    if (request.timer != null) window.clearTimeout(request.timer);
     if (message.error) request.reject(new Error(message.error));
     else request.resolve(message.payload);
   });
@@ -20,13 +36,16 @@ async function responseJson(response) {
   return body;
 }
 
-function vscodeRequest(vscode, type, payload = {}) {
+function vscodeRequest(vscode, type, payload = {}, timeoutMs = 60_000) {
   const requestId = `dashboard-${Date.now()}-${sequence++}`;
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      pending.delete(requestId);
-      reject(new Error(`VS Code did not answer ${type} within 15 seconds.`));
-    }, 15_000);
+    const timer =
+      timeoutMs == null
+        ? undefined
+        : window.setTimeout(() => {
+            pending.delete(requestId);
+            reject(new Error(`VS Code did not answer ${type} within ${timeoutMs / 1000} seconds.`));
+          }, timeoutMs);
     pending.set(requestId, { resolve, reject, timer });
     vscode.postMessage({ type, requestId, ...payload });
   });
@@ -57,6 +76,12 @@ export function createDashboardApi(runtime, report) {
       if (mode === "server") return await fetch("/api/session").then(responseJson);
       return runtime;
     },
+    subscribeReport(listener) {
+      if (!vscode) return () => {};
+      reportListeners.add(listener);
+      vscode.postMessage({ type: "context-ray/ready" });
+      return () => reportListeners.delete(listener);
+    },
     async scan(input) {
       if (mode === "server") {
         return await fetch("/api/scan", {
@@ -65,7 +90,7 @@ export function createDashboardApi(runtime, report) {
           body: JSON.stringify(input),
         }).then(responseJson);
       }
-      if (vscode) return await vscodeRequest(vscode, "context-ray/scan", { input });
+      if (vscode) return await vscodeRequest(vscode, "context-ray/scan", { input }, null);
       throw new Error("This is a static report. Start `context-ray serve` to run a new scan.");
     },
     async project(input) {
@@ -108,10 +133,15 @@ export function createDashboardApi(runtime, report) {
         return { saved: true, fileName: names[format] };
       }
       if (vscode) {
-        return await vscodeRequest(vscode, "context-ray/export", {
-          reportId: currentReport.scan.id,
-          format,
-        });
+        return await vscodeRequest(
+          vscode,
+          "context-ray/export",
+          {
+            reportId: currentReport.scan.id,
+            format,
+          },
+          null,
+        );
       }
       if (format !== "json") {
         throw new Error("Portable reports can download JSON; use the local API for other formats.");

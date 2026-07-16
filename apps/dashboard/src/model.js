@@ -18,9 +18,9 @@ export function sourceGroup(source) {
 
 export function loadModeForSource(source) {
   if (source.status === "on-demand") return "On-demand";
-  if (source.status === "conditional") return "Progressive";
-  if (source.status === "ignored" || source.status === "shadowed") return "Excluded";
-  return "Eager";
+  if (source.status === "conditional") return "Conditional";
+  if (source.status === "active" || source.status === "truncated") return "Eager";
+  return "Excluded";
 }
 
 export function findingItems(report) {
@@ -50,9 +50,88 @@ export function reportItems(report) {
   ];
 }
 
+const SEVERITY_ORDER = { error: 0, warning: 1, note: 2 };
+
+export function sortedFindings(findings) {
+  return [...findings].sort((left, right) => {
+    const severity =
+      (SEVERITY_ORDER[left.severity] ?? Number.MAX_SAFE_INTEGER) -
+      (SEVERITY_ORDER[right.severity] ?? Number.MAX_SAFE_INTEGER);
+    if (severity !== 0) return severity;
+    const savings = (right.estimatedSavings ?? 0) - (left.estimatedSavings ?? 0);
+    if (savings !== 0) return savings;
+    return left.title.localeCompare(right.title);
+  });
+}
+
+export function initialItemId(report) {
+  const finding = sortedFindings(report.findings)[0];
+  if (finding) return `finding:${finding.id}`;
+  const source = [...report.sources].sort(
+    (left, right) =>
+      right.tokenEstimate - left.tokenEstimate || left.label.localeCompare(right.label),
+  )[0];
+  return source?.id ?? null;
+}
+
+export function findingsForFilter(findings, filter = "all") {
+  const sorted = sortedFindings(findings);
+  if (filter === "all") return sorted;
+  if (filter === "actionable") {
+    return sorted.filter(
+      (finding) => finding.category === "cost" || (finding.estimatedSavings ?? 0) > 0,
+    );
+  }
+  if (filter === "conflict") {
+    return sorted.filter((finding) => finding.category === "conflict");
+  }
+  return sorted.filter((finding) => finding.severity === filter);
+}
+
+export function findingFilterCounts(findings) {
+  return {
+    all: findings.length,
+    error: findings.filter((finding) => finding.severity === "error").length,
+    warning: findings.filter((finding) => finding.severity === "warning").length,
+    note: findings.filter((finding) => finding.severity === "note").length,
+    conflict: findings.filter((finding) => finding.category === "conflict").length,
+    actionable: findings.filter(
+      (finding) => finding.category === "cost" || (finding.estimatedSavings ?? 0) > 0,
+    ).length,
+  };
+}
+
+export function exportSuccessMessage(result) {
+  if (!result?.saved) return null;
+  return `Export ready${result.fileName ? ` · ${result.fileName}` : ""}`;
+}
+
+export function compositionSegments(items, scaleMax, availableWidth = 980, metadataLaneWidth = 0) {
+  const safeScale = Math.max(1, scaleMax);
+  const tokenItems = items.filter((item) => item.tokenEstimate > 0);
+  const metadataItems = items.filter((item) => item.tokenEstimate <= 0);
+  const safeMetadataLaneWidth = Math.min(availableWidth, Math.max(0, metadataLaneWidth));
+  const tokenScaleWidth = availableWidth - safeMetadataLaneWidth;
+  let cursor = 0;
+  const tokens = tokenItems.map((item) => {
+    const width = tokenScaleWidth * (item.tokenEstimate / safeScale);
+    const segment = { item, x: cursor, width, scale: "tokens" };
+    cursor += width;
+    return segment;
+  });
+  const metadataWidth = metadataItems.length ? safeMetadataLaneWidth / metadataItems.length : 0;
+  const metadata = metadataItems.map((item, index) => ({
+    item,
+    x: tokenScaleWidth + index * metadataWidth,
+    width: metadataWidth,
+    scale: "metadata",
+  }));
+  return [...tokens, ...metadata];
+}
+
 const GROUPS = {
   "source-type": ["Instructions", "Configuration", "Skills", "MCP", "References", "Findings"],
-  "load-mode": ["Eager", "Progressive", "On-demand", "Excluded", "Findings"],
+  "load-mode": ["Eager", "Conditional", "On-demand", "Excluded", "Findings"],
   relevance: ["High", "Medium", "Low", "Unknown", "Findings"],
 };
 

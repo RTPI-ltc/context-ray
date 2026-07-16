@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bar } from "@visx/shape";
 import {
   IconAlertTriangle,
@@ -25,7 +25,12 @@ import {
   AGENTS,
   buildBands,
   compact,
+  compositionSegments,
+  exportSuccessMessage,
+  findingFilterCounts,
+  findingsForFilter,
   formatScanLabel,
+  initialItemId,
   loadModeForSource,
   recommendationForSource,
   referencesForItem,
@@ -57,49 +62,86 @@ function sourceIcon(item, size = 18) {
   return <IconFileText size={size} stroke={1.7} />;
 }
 
-function Metric({ label, value = null, tone = "default", suffix = null, children = null }) {
-  return (
-    <section className="metric">
+function Metric({
+  label,
+  value = null,
+  tone = "default",
+  suffix = null,
+  children = null,
+  onActivate = null,
+  actionLabel = null,
+}) {
+  const content = (
+    <>
       <div className="metric-label">
         {label} <IconInfoCircle size={14} stroke={1.7} />
       </div>
       {value !== null ? <div className={`metric-value ${tone}`}>{value}</div> : children}
       {suffix ? <div className="metric-suffix">{suffix}</div> : null}
+    </>
+  );
+  return (
+    <section className={`metric ${onActivate ? "interactive" : ""}`}>
+      {onActivate ? (
+        <button className="metric-action" onClick={onActivate} aria-label={actionLabel ?? label}>
+          {content}
+          <IconChevronRight className="metric-drill-icon" size={16} aria-hidden="true" />
+        </button>
+      ) : (
+        content
+      )}
     </section>
   );
-}
-
-function visualWeight(item, bandName) {
-  if (item.itemType === "finding" || bandName === "Findings") return 1;
-  const capped =
-    bandName === "References" ? Math.min(item.tokenEstimate, 2_100) : item.tokenEstimate;
-  return Math.sqrt(Math.max(1, capped));
 }
 
 function CompositionChart({ report, groupBy, selectedId, onSelect, showEstimates, view }) {
   const bands = buildBands(report, groupBy);
   const width = 1_000;
+  const available = width - 20;
   const top = 8;
   const gap = 6;
   const bandHeight = view === "list" ? 62 : 80;
   const chartHeight = top + bands.length * (bandHeight + gap) + 18;
+  const scaleMax = Math.max(
+    1,
+    report.summary.effectiveTokens,
+    ...bands.map((band) => band.totalTokens),
+  );
+  const maxMetadataItems = Math.max(
+    0,
+    ...bands
+      .filter((band) => band.name !== "Findings")
+      .map((band) => band.items.filter((item) => item.tokenEstimate <= 0).length),
+  );
+  const metadataLaneWidth = maxMetadataItems
+    ? Math.min(available * 0.24, Math.max(56, maxMetadataItems * 28))
+    : 0;
 
   return (
     <div className="composition-svg-wrap">
       <svg
         className="composition-svg"
         viewBox={`0 0 ${width} ${chartHeight}`}
-        role="img"
-        aria-label={`Effective context grouped by ${groupBy}`}
+        role="group"
+        aria-labelledby="composition-chart-title composition-chart-description"
       >
+        <title id="composition-chart-title">Effective context grouped by {groupBy}</title>
+        <desc id="composition-chart-description">
+          Token-bearing sources use one linear scale from zero to {scaleMax} estimated tokens.
+          Outlined blocks in a separate lane are zero-token records. Every report item is present.
+        </desc>
         {bands.map((band, bandIndex) => {
           const y = top + bandIndex * (bandHeight + gap);
           const palette = PALETTES[bandIndex] ?? PALETTES[0];
-          const totalWeight = band.items.reduce(
-            (sum, item) => sum + visualWeight(item, band.name),
-            0,
-          );
-          let cursor = 10;
+          const segments =
+            band.name === "Findings"
+              ? band.items.map((item, index) => ({
+                  item,
+                  x: (available / Math.max(1, band.items.length)) * index,
+                  width: available / Math.max(1, band.items.length),
+                  scale: "count",
+                }))
+              : compositionSegments(band.items, scaleMax, available, metadataLaneWidth);
           return (
             <g key={band.name}>
               <Bar
@@ -113,7 +155,7 @@ function CompositionChart({ report, groupBy, selectedId, onSelect, showEstimates
                 strokeWidth={0.8}
               />
               <text x={10} y={y + 20} className="band-title">
-                {band.name} ({band.count})
+                {band.name} ({band.count}){band.name === "Findings" ? " · count" : ""}
               </text>
               <text x={width - 10} y={y + 20} textAnchor="end" className="band-total">
                 {showEstimates
@@ -122,65 +164,83 @@ function CompositionChart({ report, groupBy, selectedId, onSelect, showEstimates
                     : compact(band.totalTokens)
                   : ""}
               </text>
-              {band.items.map((item) => {
-                const available = width - 20;
-                const itemWidth = Math.max(
-                  85,
-                  available * (visualWeight(item, band.name) / Math.max(1, totalWeight)),
-                );
-                const clamped = Math.min(itemWidth, width - 10 - cursor);
-                const x = cursor;
-                cursor += clamped;
-                if (clamped <= 0) return null;
+              {segments.map(({ item, x: segmentX, width: segmentWidth, scale }) => {
+                const x = 10 + segmentX;
                 const selected = item.id === selectedId;
                 const itemY = y + 28;
                 const itemHeight = bandHeight - 36;
                 const shortLabel =
                   item.label.length > 40 ? `${item.label.slice(0, 38)}…` : item.label;
-                const select = () => onSelect(item.id);
+                const select = (trigger) => onSelect(item.id, trigger);
+                const clipId = `source-clip-${bandIndex}-${item.id.replaceAll(/[^a-zA-Z0-9_-]/g, "-")}`;
+                const metadata = scale === "metadata";
                 return (
                   <g
                     key={item.id}
                     className="chart-source"
-                    onClick={select}
+                    onClick={(event) => select(event.currentTarget)}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") select();
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        select(event.currentTarget);
+                      }
                     }}
                     tabIndex={0}
                     role="button"
-                    aria-label={`Inspect ${item.label}`}
+                    aria-pressed={selected}
+                    aria-label={`Inspect ${item.label}, ${item.tokenEstimate} estimated tokens${metadata ? ", zero-token record" : ""}`}
                   >
+                    <title>
+                      {item.label} · {item.tokenEstimate} estimated tokens
+                    </title>
                     <Bar
                       x={x}
                       y={itemY}
-                      width={Math.max(1, clamped - 2)}
+                      width={Math.max(0, segmentWidth - 2)}
                       height={itemHeight}
-                      fill={selected ? palette.tint : "rgba(4,13,19,.24)"}
+                      fill={
+                        metadata
+                          ? "rgba(4,13,19,.08)"
+                          : selected
+                            ? palette.tint
+                            : "rgba(4,13,19,.24)"
+                      }
                       stroke={selected ? "#eef8ff" : palette.stroke}
                       strokeWidth={selected ? 1.5 : 0.8}
+                      strokeDasharray={metadata ? "4 3" : undefined}
                     />
-                    <clipPath id={`source-clip-${item.id.replaceAll(":", "-")}`}>
+                    <rect
+                      className="chart-hit-target"
+                      x={x + segmentWidth / 2 - Math.max(24, segmentWidth) / 2}
+                      y={itemY}
+                      width={Math.max(24, segmentWidth)}
+                      height={itemHeight}
+                      fill="transparent"
+                    />
+                    <clipPath id={clipId}>
                       <rect
                         x={x + 2}
                         y={itemY + 1}
-                        width={Math.max(0, clamped - 6)}
+                        width={Math.max(0, segmentWidth - 6)}
                         height={itemHeight - 2}
                       />
                     </clipPath>
-                    <g clipPath={`url(#source-clip-${item.id.replaceAll(":", "-")})`}>
-                      {item.itemType === "finding" ? (
+                    <g clipPath={`url(#${clipId})`}>
+                      {item.itemType === "finding" && segmentWidth > 30 ? (
                         <IconAlertTriangle x={x + 8} y={itemY + 8} size={14} color="#ef7269" />
                       ) : null}
-                      <text
-                        x={x + (item.itemType === "finding" ? 28 : 10)}
-                        y={itemY + 14}
-                        className="source-label"
-                      >
-                        {shortLabel}
-                      </text>
-                      {showEstimates && item.tokenEstimate > 0 && clamped > 85 ? (
+                      {segmentWidth > 54 ? (
                         <text
-                          x={x + clamped - 10}
+                          x={x + (item.itemType === "finding" ? 28 : 10)}
+                          y={itemY + 14}
+                          className="source-label"
+                        >
+                          {shortLabel}
+                        </text>
+                      ) : null}
+                      {showEstimates && item.tokenEstimate > 0 && segmentWidth > 85 ? (
+                        <text
+                          x={x + segmentWidth - 10}
                           y={itemY + itemHeight - 5}
                           textAnchor="end"
                           className="source-token"
@@ -197,9 +257,8 @@ function CompositionChart({ report, groupBy, selectedId, onSelect, showEstimates
         })}
       </svg>
       <div className="axis-row">
-        <span>0</span>
-        <span>Tokens (estimated)</span>
-        <span>{compact(report.summary.effectiveTokens)}</span>
+        <span>Linear token scale: 0–{compact(scaleMax)} estimated tokens</span>
+        <span>Outlined right lane = zero-token records</span>
       </div>
     </div>
   );
@@ -212,6 +271,88 @@ function Relevance({ value }) {
       <span className="dot" />
       {label}
     </span>
+  );
+}
+
+const FINDING_FILTERS = [
+  ["all", "All"],
+  ["error", "Errors"],
+  ["warning", "Warnings"],
+  ["note", "Notes"],
+  ["conflict", "Conflicts"],
+  ["actionable", "Removable"],
+];
+
+function FindingsQueue({ report, filter, onFilter, selectedId, onSelect, sectionRef }) {
+  const counts = findingFilterCounts(report.findings);
+  const findings = findingsForFilter(report.findings, filter);
+  return (
+    <section
+      className="findings-section"
+      id="findings"
+      ref={sectionRef}
+      tabIndex={-1}
+      aria-labelledby="findings-heading"
+    >
+      <header className="section-heading findings-heading">
+        <div>
+          <strong id="findings-heading">Findings queue</strong>
+          <span>({findings.length} shown from the current report)</span>
+        </div>
+        <div className="finding-filters" role="group" aria-label="Filter findings">
+          {FINDING_FILTERS.map(([value, label]) => (
+            <button
+              key={value}
+              className={filter === value ? "active" : ""}
+              aria-pressed={filter === value}
+              onClick={() => onFilter(value)}
+            >
+              {label} <span>{counts[value]}</span>
+            </button>
+          ))}
+        </div>
+      </header>
+      {findings.length ? (
+        <ol className="findings-list">
+          {findings.map((finding) => {
+            const id = `finding:${finding.id}`;
+            const evidence = finding.evidence[0];
+            return (
+              <li key={finding.id}>
+                <button
+                  className={`finding-row severity-${finding.severity} ${selectedId === id ? "selected" : ""}`}
+                  onClick={(event) => onSelect(id, event.currentTarget)}
+                  aria-current={selectedId === id ? "true" : undefined}
+                >
+                  <span className="finding-severity">
+                    <IconAlertTriangle size={16} aria-hidden="true" />
+                    {finding.severity}
+                  </span>
+                  <span className="finding-summary">
+                    <strong>{finding.title}</strong>
+                    <small>{finding.message}</small>
+                  </span>
+                  <span className="finding-rule">
+                    <b>{finding.ruleId}</b>
+                    <small>
+                      {evidence
+                        ? `${evidence.path}${evidence.line ? `:${evidence.line}` : ""}`
+                        : "No path evidence"}
+                    </small>
+                  </span>
+                  <span className="finding-confidence">{finding.confidence} confidence</span>
+                  <IconChevronRight className="finding-open" size={17} aria-hidden="true" />
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <div className="findings-empty" role="status">
+          No findings match this filter in report {report.scan.id}.
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -229,50 +370,63 @@ function SourcesTable({ report, selectedId, onSelect, expanded, onToggle }) {
           <IconInfoCircle size={14} />
         </div>
       </header>
-      <div className="source-table" role="table">
-        <div className="table-row table-header" role="row">
-          <span>Source</span>
-          <span>Observed mode</span>
-          <span>Tokens (est.) ↓</span>
-          <span>Relevance</span>
-          <span>Backend recommendation</span>
-          <span />
-        </div>
-        {shown.map((source) => {
-          const recommendation = recommendationForSource(report, source.id);
-          const loadMode = loadModeForSource(source);
-          return (
-            <button
-              className={`table-row ${source.id === selectedId ? "selected" : ""}`}
-              key={source.id}
-              onClick={() => onSelect(source.id)}
-              role="row"
-            >
-              <span className="source-cell">
-                {sourceIcon(source)}
-                <span>{source.label}</span>
-              </span>
-              <span>
-                <em className={`mode ${loadMode === "On-demand" ? "on-demand" : "eager"}`}>
-                  {loadMode}
-                </em>
-              </span>
-              <span className="token-cell">{compact(source.tokenEstimate)}</span>
-              <span>
-                <Relevance value={source.relevance} />
-              </span>
-              <span className="recommendation-cell">
-                <b>{recommendation.title}</b>
-                <small>
-                  {recommendation.savings > 0
-                    ? `Est. save ${compact(recommendation.savings)}`
-                    : "No savings estimate"}
-                </small>
-              </span>
-              <span className="more">•••</span>
-            </button>
-          );
-        })}
+      <div className="source-table-wrap">
+        <table className="source-table">
+          <caption className="sr-only">
+            Token-bearing sources from the current report, sorted by estimated tokens
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Source</th>
+              <th scope="col">Observed mode</th>
+              <th scope="col" aria-sort="descending">
+                Tokens (est.)
+              </th>
+              <th scope="col">Relevance</th>
+              <th scope="col">Backend recommendation</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((source) => {
+              const recommendation = recommendationForSource(report, source.id);
+              const loadMode = loadModeForSource(source);
+              return (
+                <tr className={source.id === selectedId ? "selected" : ""} key={source.id}>
+                  <th scope="row" data-label="Source">
+                    <button
+                      className="source-select"
+                      onClick={(event) => onSelect(source.id, event.currentTarget)}
+                      aria-current={source.id === selectedId ? "true" : undefined}
+                    >
+                      <span className="source-cell">
+                        {sourceIcon(source)}
+                        <span>{source.label}</span>
+                      </span>
+                      <IconChevronRight size={16} aria-hidden="true" />
+                    </button>
+                  </th>
+                  <td data-label="Observed mode">
+                    <em className={`mode ${loadMode.toLowerCase()}`}>{loadMode}</em>
+                  </td>
+                  <td data-label="Tokens (est.)" className="token-cell">
+                    {compact(source.tokenEstimate)}
+                  </td>
+                  <td data-label="Relevance">
+                    <Relevance value={source.relevance} />
+                  </td>
+                  <td data-label="Recommendation" className="recommendation-cell">
+                    <b>{recommendation.title}</b>
+                    <small>
+                      {recommendation.savings > 0
+                        ? `Est. save ${compact(recommendation.savings)}`
+                        : "No savings estimate"}
+                    </small>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
       <footer className="table-footer">
         <span>
@@ -301,10 +455,14 @@ function Confidence({ value }) {
 }
 
 function Inspector({ report, item, api, onClose, onToast }) {
+  const inspectorRef = useRef(null);
+  const closeButtonRef = useRef(null);
+  const [isModal, setIsModal] = useState(
+    () => typeof window !== "undefined" && window.matchMedia?.("(max-width: 980px)").matches,
+  );
+  const observedMode = item.itemType === "source" ? loadModeForSource(item) : "Eager";
   const [scenario, setScenario] = useState(
-    item.itemType === "source"
-      ? loadModeForSource(item).toLowerCase().replace("progressive", "progressive")
-      : "eager",
+    observedMode === "Eager" ? "eager" : observedMode === "On-demand" ? "on-demand" : "",
   );
   const [projection, setProjection] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -324,9 +482,22 @@ function Inspector({ report, item, api, onClose, onToast }) {
     ? Math.round((item.tokenEstimate / report.summary.effectiveTokens) * 100)
     : 0;
 
+  useEffect(() => {
+    const query = window.matchMedia?.("(max-width: 980px)");
+    if (!query) return undefined;
+    const update = () => {
+      setIsModal(query.matches);
+      if (query.matches) closeButtonRef.current?.focus();
+    };
+    update();
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
+
   const project = async (event) => {
     const mode = event.target.value;
     setScenario(mode);
+    setProjection(null);
     setBusy(true);
     setLocalError("");
     try {
@@ -353,7 +524,39 @@ function Inspector({ report, item, api, onClose, onToast }) {
   };
 
   return (
-    <aside className="inspector">
+    <aside
+      ref={inspectorRef}
+      className="inspector"
+      role={isModal ? "dialog" : undefined}
+      aria-modal={isModal ? "true" : undefined}
+      aria-label={`Inspector for ${item.label}`}
+      aria-busy={busy}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          onClose();
+          return;
+        }
+        if (event.key === "Tab" && isModal) {
+          const focusable = [
+            ...(inspectorRef.current?.querySelectorAll(
+              'button:not([disabled]), select:not([disabled]), textarea:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+            ) ?? []),
+          ].filter((element) => element.getAttribute("aria-hidden") !== "true");
+          const first = focusable[0];
+          const last = focusable.at(-1);
+          if (!first || !last) {
+            event.preventDefault();
+          } else if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+      }}
+    >
       <div className="inspector-scroll">
         <header className="inspector-title">
           <div className="inspector-source-icon">{sourceIcon(item, 25)}</div>
@@ -361,7 +564,12 @@ function Inspector({ report, item, api, onClose, onToast }) {
             {item.label}
             <span>{item.path}</span>
           </h2>
-          <button className="icon-button" aria-label="Close inspector" onClick={onClose}>
+          <button
+            ref={closeButtonRef}
+            className="icon-button"
+            aria-label="Close inspector"
+            onClick={onClose}
+          >
             <IconX size={20} />
           </button>
         </header>
@@ -426,7 +634,7 @@ function Inspector({ report, item, api, onClose, onToast }) {
             </small>
           </div>
         </div>
-        {item.itemType === "source" ? (
+        {item.itemType === "source" && item.tokenEstimate > 0 ? (
           <div className="inspector-block load-mode">
             <label htmlFor="load-mode">Scenario load mode</label>
             <div className="select-wrap">
@@ -437,15 +645,18 @@ function Inspector({ report, item, api, onClose, onToast }) {
                 onChange={project}
                 disabled={!api.supports.projection || busy}
               >
+                {scenario === "" ? (
+                  <option value="" disabled>
+                    Choose scenario…
+                  </option>
+                ) : null}
                 <option value="eager">Eager</option>
                 <option value="progressive">Progressive</option>
                 <option value="on-demand">On-demand</option>
               </select>
               <IconChevronDown size={16} />
             </div>
-            <small>
-              Observed: {loadModeForSource(item)} · this control runs analysis, not a config write
-            </small>
+            <small>Observed: {observedMode} · this control runs analysis, not a config write</small>
           </div>
         ) : null}
         <div className="inspector-block evidence-block">
@@ -470,13 +681,21 @@ function Inspector({ report, item, api, onClose, onToast }) {
           ) : null}
           {preview ? (
             <div className="source-preview">
-              <strong>
-                {preview.path}:{preview.startLine}–{preview.endLine}
-              </strong>
+              <header>
+                <strong>
+                  {preview.path}:{preview.startLine}–{preview.endLine}
+                </strong>
+                {preview.truncated ? <span>Excerpt truncated by preview limits</span> : null}
+              </header>
+              {preview.note ? <p>{preview.note}</p> : null}
               <pre>{preview.content}</pre>
             </div>
           ) : null}
-          {localError ? <p className="inline-error">{localError}</p> : null}
+          {localError ? (
+            <p className="inline-error" role="alert">
+              {localError}
+            </p>
+          ) : null}
         </div>
       </div>
       <footer className="inspector-footer">
@@ -508,17 +727,34 @@ export function App() {
   const [agent, setAgent] = useState(injected?.scan.agent ?? "codex");
   const [target, setTarget] = useState(injected?.scan.target ?? ".");
   const [task, setTask] = useState(injected?.scan.task ?? "");
-  const [selectedId, setSelectedId] = useState(injected?.sources[0]?.id ?? null);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [selectedId, setSelectedId] = useState(injected ? initialItemId(injected) : null);
+  const [inspectorOpen, setInspectorOpen] = useState(Boolean(injected));
   const [showEstimates, setShowEstimates] = useState(true);
   const [view, setView] = useState("blocks");
   const [groupBy, setGroupBy] = useState("source-type");
+  const [findingFilter, setFindingFilter] = useState("all");
   const [expanded, setExpanded] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState("json");
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
+  const findingsRef = useRef(null);
+  const lastInspectorTriggerRef = useRef(null);
+  const toastTimerRef = useRef(null);
+
+  const showToast = (message) => {
+    window.clearTimeout(toastTimerRef.current);
+    setToast(message);
+    toastTimerRef.current = window.setTimeout(() => setToast(""), 2_800);
+  };
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(toastTimerRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     let active = true;
@@ -535,17 +771,60 @@ export function App() {
     };
   }, [api]);
 
-  const items = useMemo(() => (report ? reportItems(report) : []), [report]);
-  const selected = items.find((item) => item.id === selectedId) ?? items[0];
-  useEffect(() => {
-    if (items[0] && !items.some((item) => item.id === selectedId)) {
-      setSelectedId(items[0].id);
-    }
-  }, [items, selectedId]);
+  useEffect(
+    () =>
+      api.subscribeReport((next, nextRuntime) => {
+        const nextSelectedId = initialItemId(next);
+        setReport(next);
+        if (nextRuntime) setSession(nextRuntime);
+        setAgent(next.scan.agent);
+        setTarget(next.scan.target);
+        setTask(next.scan.task ?? "");
+        setSelectedId(nextSelectedId);
+        setInspectorOpen(Boolean(nextSelectedId));
+        setFindingFilter("all");
+        setError("");
+        showToast(`Report refreshed by VS Code · ${next.scan.durationMs} ms`);
+      }),
+    [api],
+  );
 
-  const showToast = (message) => {
-    setToast(message);
-    window.setTimeout(() => setToast(""), 2_800);
+  const items = useMemo(() => (report ? reportItems(report) : []), [report]);
+  const fallbackSelectedId = report ? initialItemId(report) : null;
+  const selected =
+    items.find((item) => item.id === selectedId) ??
+    items.find((item) => item.id === fallbackSelectedId) ??
+    items[0];
+  useEffect(() => {
+    if (fallbackSelectedId && !items.some((item) => item.id === selectedId)) {
+      setSelectedId(fallbackSelectedId);
+    }
+  }, [fallbackSelectedId, items, selectedId]);
+
+  const selectItem = (id, trigger = null) => {
+    if (trigger && typeof trigger.focus === "function") lastInspectorTriggerRef.current = trigger;
+    setSelectedId(id);
+    setInspectorOpen(true);
+  };
+
+  const closeInspector = () => {
+    setInspectorOpen(false);
+    window.requestAnimationFrame(() => lastInspectorTriggerRef.current?.focus());
+  };
+
+  const drillIntoFindings = (filter) => {
+    setFindingFilter(filter);
+    window.requestAnimationFrame(() => {
+      findingsRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+      findingsRef.current?.focus({ preventScroll: true });
+    });
+  };
+
+  const inspectLargestSource = (predicate = () => true) => {
+    const source = [...report.sources]
+      .filter(predicate)
+      .sort((left, right) => right.tokenEstimate - left.tokenEstimate)[0];
+    if (source) selectItem(source.id, document.activeElement);
   };
 
   const runScan = async () => {
@@ -555,8 +834,10 @@ export function App() {
     try {
       const next = await api.scan({ agent, target, task });
       setReport(next);
-      setSelectedId(next.sources[0]?.id ?? null);
-      setInspectorOpen(true);
+      const nextSelectedId = initialItemId(next);
+      setSelectedId(nextSelectedId);
+      setInspectorOpen(Boolean(nextSelectedId));
+      setFindingFilter("all");
       showToast(`Real scan complete · ${next.sources.length} sources · ${next.scan.durationMs} ms`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -570,7 +851,12 @@ export function App() {
     setError("");
     try {
       const result = await api.exportReport(report, exportFormat);
-      showToast(`Export ready${result.fileName ? ` · ${result.fileName}` : ""}`);
+      const successMessage = exportSuccessMessage(result);
+      if (!successMessage) {
+        setMoreOpen(false);
+        return;
+      }
+      showToast(successMessage);
       setMoreOpen(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -690,23 +976,35 @@ export function App() {
           value={compact(report.summary.effectiveTokens)}
           tone="blue"
           suffix="tokens (est.)"
+          onActivate={() => inspectLargestSource()}
+          actionLabel="Inspect the largest startup context source"
         />
         <Metric
           label="Tool schemas"
           value={compact(report.summary.toolSchemaTokens)}
           suffix="tokens (est.)"
+          onActivate={() =>
+            inspectLargestSource((source) =>
+              ["mcp-tool", "mcp-server", "mcp-config"].includes(source.kind),
+            )
+          }
+          actionLabel="Inspect the largest MCP tool schema source"
         />
         <Metric
           label="Potentially removable"
           value={compact(report.summary.potentialWasteTokens)}
           tone="amber"
           suffix="tokens (est.)"
+          onActivate={() => drillIntoFindings("actionable")}
+          actionLabel="Show findings with estimated removable tokens"
         />
         <Metric
           label="Conflicts"
           value={String(report.summary.conflicts)}
           tone="red"
           suffix="detected"
+          onActivate={() => drillIntoFindings("conflict")}
+          actionLabel="Show conflict findings"
         />
         <Metric label="Coverage">
           <div className="coverage-lines">
@@ -716,7 +1014,11 @@ export function App() {
             <span>Runtime {runtimeCoverage?.status ?? "unknown"}</span>
           </div>
         </Metric>
-        <Metric label="Evidence">
+        <Metric
+          label="Evidence"
+          onActivate={() => drillIntoFindings("all")}
+          actionLabel="Show all findings from the current report"
+        >
           <div className="estimate-lines">
             <span>{report.summary.activeSources} effective sources</span>
             <span>{report.findings.length} findings</span>
@@ -742,11 +1044,12 @@ export function App() {
                 <IconChevronDown size={14} />
               </label>
               <span>View:</span>
-              <div className="view-toggle">
+              <div className="view-toggle" role="group" aria-label="Composition density">
                 <button
                   className={view === "blocks" ? "active" : ""}
                   onClick={() => setView("blocks")}
                   aria-label="Block view"
+                  aria-pressed={view === "blocks"}
                 >
                   <IconTable size={16} />
                 </button>
@@ -754,6 +1057,7 @@ export function App() {
                   className={view === "list" ? "active" : ""}
                   onClick={() => setView("list")}
                   aria-label="Compact view"
+                  aria-pressed={view === "list"}
                 >
                   <IconLayoutList size={17} />
                 </button>
@@ -772,33 +1076,42 @@ export function App() {
             report={report}
             groupBy={groupBy}
             selectedId={selectedId}
-            onSelect={(id) => {
-              setSelectedId(id);
-              setInspectorOpen(true);
-            }}
+            onSelect={selectItem}
             showEstimates={showEstimates}
             view={view}
+          />
+          <FindingsQueue
+            report={report}
+            filter={findingFilter}
+            onFilter={setFindingFilter}
+            selectedId={selectedId}
+            onSelect={selectItem}
+            sectionRef={findingsRef}
           />
           <SourcesTable
             report={report}
             selectedId={selectedId}
-            onSelect={(id) => {
-              setSelectedId(id);
-              setInspectorOpen(true);
-            }}
+            onSelect={selectItem}
             expanded={expanded}
             onToggle={() => setExpanded((value) => !value)}
           />
         </section>
         {inspectorOpen && selected ? (
-          <Inspector
-            key={`${report.scan.id}-${selected.id}`}
-            report={report}
-            item={selected}
-            api={api}
-            onClose={() => setInspectorOpen(false)}
-            onToast={showToast}
-          />
+          <>
+            <button
+              className="inspector-backdrop"
+              aria-label="Close inspector"
+              onClick={closeInspector}
+            />
+            <Inspector
+              key={`${report.scan.id}-${selected.id}`}
+              report={report}
+              item={selected}
+              api={api}
+              onClose={closeInspector}
+              onToast={showToast}
+            />
+          </>
         ) : null}
       </div>
       {toast ? (

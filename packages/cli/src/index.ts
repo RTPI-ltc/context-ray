@@ -4,7 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command, InvalidArgumentError, Option } from "commander";
 import open from "open";
-import { analyzeContext, compareReports, isScanReport, observeRuntime } from "@context-ray/core";
+import {
+  analyzeContext,
+  compareReports,
+  evaluateBaselineGate,
+  observeRuntime,
+  severityRank,
+  validateScanReport,
+  type FailureThreshold,
+} from "@context-ray/core";
 import { startContextRayServer } from "@context-ray/server";
 import type { AgentId, ScanReport, Severity } from "@context-ray/schema";
 import {
@@ -28,6 +36,7 @@ interface ScanFlags {
   includeGlobal?: boolean;
   mcpSnapshot?: string[];
   failOn: "none" | Severity;
+  failOnNew: FailureThreshold;
   baseline?: string;
   open?: boolean;
   color?: boolean;
@@ -60,8 +69,12 @@ async function atomicWrite(filePath: string, content: string): Promise<void> {
 
 async function loadReport(filePath: string): Promise<ScanReport> {
   const parsed: unknown = JSON.parse(await readFile(path.resolve(filePath), "utf8"));
-  if (!isScanReport(parsed)) throw new Error(`${filePath} is not a Context Ray schema v1 report.`);
-  return parsed;
+  const validation = validateScanReport(parsed);
+  if (!validation.valid) {
+    const details = validation.errors.slice(0, 5).join("; ");
+    throw new Error(`${filePath} is not a valid Context Ray schema v1 report: ${details}`);
+  }
+  return parsed as ScanReport;
 }
 
 async function loadHtmlTemplate(): Promise<string> {
@@ -83,14 +96,10 @@ async function loadHtmlTemplate(): Promise<string> {
   );
 }
 
-function failureRank(severity: Severity): number {
-  return severity === "error" ? 3 : severity === "warning" ? 2 : 1;
-}
-
 function shouldFail(report: ScanReport, failOn: ScanFlags["failOn"]): boolean {
   if (failOn === "none") return false;
-  const threshold = failureRank(failOn);
-  return report.findings.some((finding) => failureRank(finding.severity) >= threshold);
+  const threshold = severityRank(failOn);
+  return report.findings.some((finding) => severityRank(finding.severity) >= threshold);
 }
 
 async function serialize(report: ScanReport, flags: ScanFlags): Promise<string> {
@@ -111,6 +120,15 @@ async function serialize(report: ScanReport, flags: ScanFlags): Promise<string> 
 }
 
 async function runScan(root: string, flags: ScanFlags): Promise<ScanReport> {
+  if (flags.failOnNew !== "none" && !flags.baseline) {
+    throw new Error("--fail-on-new requires --baseline <report.json>.");
+  }
+  const defaultHtmlPath = path.join(root, ".context-ray", "report.html");
+  const outputPath = flags.output ?? (flags.format === "html" ? defaultHtmlPath : undefined);
+  const baseline = flags.baseline ? await loadReport(flags.baseline) : undefined;
+  if (flags.baseline && outputPath && path.resolve(flags.baseline) === path.resolve(outputPath)) {
+    throw new Error("--baseline and --output must use different files.");
+  }
   const report = await analyzeContext({
     root,
     target: flags.target,
@@ -120,8 +138,6 @@ async function runScan(root: string, flags: ScanFlags): Promise<ScanReport> {
     ...(flags.mcpSnapshot?.length ? { mcpSnapshotPaths: flags.mcpSnapshot } : {}),
   });
   const output = await serialize(report, flags);
-  const defaultHtmlPath = path.join(root, ".context-ray", "report.html");
-  const outputPath = flags.output ?? (flags.format === "html" ? defaultHtmlPath : undefined);
   if (outputPath) {
     await atomicWrite(outputPath, output);
     process.stderr.write(`Context Ray wrote ${path.resolve(outputPath)}\n`);
@@ -129,11 +145,19 @@ async function runScan(root: string, flags: ScanFlags): Promise<ScanReport> {
   } else {
     process.stdout.write(output);
   }
-  if (flags.baseline) {
-    const baseline = await loadReport(flags.baseline);
-    process.stderr.write(
-      formatDiff(compareReports(baseline, report), Boolean(process.stderr.isTTY)),
-    );
+  if (baseline) {
+    const diff = compareReports(baseline, report);
+    process.stderr.write(formatDiff(diff, Boolean(process.stderr.isTTY)));
+    if (!diff.comparability.comparable) {
+      process.stderr.write(
+        `Baseline scope differs in: ${diff.comparability.scopeDifferences.join(", ")}\n`,
+      );
+      if (flags.failOnNew !== "none") {
+        throw new Error("cannot gate new regressions against a non-comparable baseline.");
+      }
+    } else if (evaluateBaselineGate(diff, flags.failOnNew).failed) {
+      process.exitCode = 2;
+    }
   }
   if (shouldFail(report, flags.failOn)) process.exitCode = 2;
   return report;
@@ -163,6 +187,14 @@ function addScanOptions(command: Command): Command {
         .default("none"),
     )
     .option("--baseline <report.json>", "print regression deltas against a prior JSON report")
+    .addOption(
+      new Option(
+        "--fail-on-new <severity>",
+        "with --baseline, exit 2 only for added findings or severity increases",
+      )
+        .choices(["none", "note", "warning", "error"])
+        .default("none"),
+    )
     .option("--open", "open a written HTML report")
     .option("--no-color", "disable ANSI colors");
 }

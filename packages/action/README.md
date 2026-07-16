@@ -19,4 +19,18 @@ steps:
       sarif_file: .context-ray/report.sarif
 ```
 
-The local `uses: ./` form is suitable for this repository's own workflow. Replace it with a pinned release reference only after a remote and release process exist.
+The local `uses: ./` form is suitable for this repository's own workflow. External consumers should use a commit SHA or tagged release reference after the first release is published.
+
+To gate only regressions against a committed report, set `baseline` and
+`fail-on-new`. That mode replaces the default full-report `fail-on: error`
+gate, so unchanged existing findings do not fail the job. Keep the baseline at
+a different path from `<output-directory>/report.json`.
+
+```yaml
+- uses: ./
+  with:
+    target: services/payments
+    baseline: .context-ray/baseline.json
+    fail-on-new: warning
+    output-directory: .context-ray/current
+```

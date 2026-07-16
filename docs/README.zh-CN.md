@@ -58,6 +58,6 @@ pnpm context-ray scan . --agent codex --format html --output .context-ray/report
 
 ## 当前状态
 
-当前版本是本地 `0.1.0` 预发布仓库，尚未配置远端，也没有发布 npm、VS Code Marketplace 或 GitHub Action。未来发布前应重新检查包名、版本、依赖许可和安全审计结果。
+当前版本是托管于 [RTPI-ltc/context-ray](https://github.com/RTPI-ltc/context-ray) 的 `0.1.0` 源码预发布版本，尚未发布 npm、VS Code Marketplace 或带标签的 GitHub Action。首次正式发布前仍需重新检查包名、发布者身份、版本、依赖许可和安全审计结果。
 
 项目采用 [MIT License](../LICENSE)。

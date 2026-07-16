@@ -3,18 +3,20 @@
 ## 0.1 — local pre-release (implemented)
 
 - Five repository adapters.
-- Source states, provenance edges, coverage, findings, recommendations, and report diff.
+- Source states, provenance edges, coverage, findings, recommendations, and comparable report diff.
+- Complete runtime report validation, published JSON Schema, and an added-regression baseline gate.
 - Terminal, JSON, Markdown, SARIF, and standalone HTML.
 - Loopback-backed interactive Dashboard with real rescans, projection, source preview, and export.
 - VS Code extension with host-bridged Dashboard, diagnostics, trees, rescan-on-save, and save-dialog export.
-- GitHub Action with JSON/SARIF/Markdown artifacts, annotations, job summary, and severity gate.
+- GitHub Action with JSON/SARIF/Markdown artifacts, annotations, job summary,
+  current-report and baseline-regression gates, plus packaged-bundle smoke coverage.
 - Explicit runtime process observation.
 
 ## 0.2 — adapter hardening
 
 - Snapshot fixtures from each supported agent version.
 - Repository-local config file for shared scan profiles.
-- JSON Schema artifact and compatibility test corpus.
+- Cross-version JSON Schema compatibility corpus.
 - More conflict families: test commands, formatter, generated files, edit boundaries, package roots.
 - Better structured relevance with zero network dependency.
 - Windows path and shell fixtures.

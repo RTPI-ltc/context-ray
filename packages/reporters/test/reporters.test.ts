@@ -1,7 +1,13 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { analyzeContext } from "@context-ray/core";
-import { formatMarkdown, formatSarif, formatTerminal, renderHtml } from "../src/index.js";
+import { analyzeContext, compareReports } from "@context-ray/core";
+import {
+  formatDiff,
+  formatMarkdown,
+  formatSarif,
+  formatTerminal,
+  renderHtml,
+} from "../src/index.js";
 
 describe("reporters", () => {
   it("emits terminal, Markdown, SARIF, and safe standalone HTML", async () => {
@@ -36,5 +42,25 @@ describe("reporters", () => {
     );
     expect(interactiveHtml).toContain('"mode":"server"');
     expect(interactiveHtml).not.toContain("window.__CONTEXT_RAY_RUNTIME__ = null;");
+  });
+
+  it("shows scope comparability and changed report details", async () => {
+    const before = await analyzeContext({
+      root: path.resolve("fixtures/sample-repo"),
+      target: "services/payments",
+      agent: "codex",
+    });
+    const after = structuredClone(before);
+    const source = after.sources[0];
+    const finding = after.findings.find((item) => item.severity === "warning");
+    expect(source).toBeDefined();
+    expect(finding).toBeDefined();
+    if (!source || !finding) return;
+    source.tokenEstimate += 1;
+    finding.severity = "error";
+    const output = formatDiff(compareReports(before, after), false);
+    expect(output).toContain("comparable scope");
+    expect(output).toContain("1 changed");
+    expect(output).toContain("1 severity increased");
   });
 });

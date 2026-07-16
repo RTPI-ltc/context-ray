@@ -1,11 +1,18 @@
-import type { ContextSource, LoadMode, LoadModeProjection, ScanReport } from "@context-ray/schema";
+import type {
+  ContextSource,
+  LoadMode,
+  LoadModeProjection,
+  ObservedLoadMode,
+  ScanReport,
+} from "@context-ray/schema";
 
-const STARTUP_STATUSES = new Set<ContextSource["status"]>(["active", "conditional", "truncated"]);
+const EFFECTIVE_STATUSES = new Set<ContextSource["status"]>(["active", "truncated"]);
 
-export function loadModeForSource(source: ContextSource): LoadMode {
+export function loadModeForSource(source: ContextSource): ObservedLoadMode {
   if (source.status === "on-demand") return "on-demand";
-  if (source.status === "conditional") return "progressive";
-  return "eager";
+  if (source.status === "conditional") return "conditional";
+  if (EFFECTIVE_STATUSES.has(source.status)) return "eager";
+  return "excluded";
 }
 
 function contributionForMode(source: ContextSource, mode: LoadMode): number {
@@ -24,7 +31,9 @@ export function projectLoadMode(
   if (!source) throw new Error(`Source not found in report ${report.scan.id}: ${sourceId}`);
 
   const currentMode = loadModeForSource(source);
-  const currentContributionTokens = STARTUP_STATUSES.has(source.status) ? source.tokenEstimate : 0;
+  const currentContributionTokens = EFFECTIVE_STATUSES.has(source.status)
+    ? source.tokenEstimate
+    : 0;
   const projectedContributionTokens = contributionForMode(source, requestedMode);
   const deltaTokens = projectedContributionTokens - currentContributionTokens;
   const projectedEffectiveTokens = Math.max(0, report.summary.effectiveTokens + deltaTokens);
@@ -33,11 +42,15 @@ export function projectLoadMode(
   const explanation =
     requestedMode === currentMode
       ? "The selected scenario matches the source's currently observed load mode."
-      : requestedMode === "eager"
-        ? "The scenario places the full source in startup context."
-        : requestedMode === "progressive"
-          ? "The scenario keeps a compact discovery descriptor in startup context and defers the remaining detail."
-          : "The scenario removes the source from startup context and loads it only after explicit demand.";
+      : currentMode === "conditional" && requestedMode === "on-demand"
+        ? "The source is currently conditional and contributes no startup tokens for this target; this scenario makes loading explicitly on-demand."
+        : currentMode === "excluded" && requestedMode === "on-demand"
+          ? "The source stays out of startup context but becomes available after explicit demand."
+          : requestedMode === "eager"
+            ? "The scenario places the full source in startup context."
+            : requestedMode === "progressive"
+              ? "The scenario keeps a compact discovery descriptor in startup context and defers the remaining detail."
+              : "The scenario removes the source from startup context and loads it only after explicit demand.";
 
   return {
     reportId: report.scan.id,

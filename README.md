@@ -55,6 +55,15 @@ Compare two reports:
 pnpm context-ray compare before.json after.json
 ```
 
+Gate only regressions introduced since a comparable baseline (new findings or
+severity increases), while leaving the existing all-current-findings gate
+available:
+
+```bash
+pnpm context-ray scan . --format json --output current.json \
+  --baseline before.json --fail-on-new warning
+```
+
 Run a command only when runtime metadata is intentionally required:
 
 ```bash
@@ -75,6 +84,7 @@ context-ray scan [root]
   --mcp-snapshot <file>
   --baseline <report.json>
   --fail-on none|note|warning|error
+  --fail-on-new none|note|warning|error
 
 context-ray compare <before.json> <after.json> [--json]
 context-ray trace --root <path> [options] -- <command...>
@@ -82,7 +92,12 @@ context-ray doctor
 context-ray serve [root] [--agent <agent>] [--target <path>] [--host 127.0.0.1] [--port 4173] [--open]
 ```
 
-Exit code `2` means a configured diagnostic threshold was reached. Other non-zero exits indicate a CLI or runtime error.
+Exit code `2` means a configured diagnostic threshold was reached.
+`--fail-on` evaluates every current finding; `--fail-on-new` requires
+`--baseline` and evaluates only added findings and severity increases. Baselines
+whose agent, target, task, or scan mode differ are reported as non-comparable
+and cannot be used for a new-regression gate. Other non-zero exits indicate a
+CLI or runtime error.
 
 ## Effective-context model
 
@@ -145,7 +160,7 @@ docs                 Product, architecture, adapters, schema, security, roadmap
 
 ## Project status
 
-This is a local pre-release repository at version `0.1.0`. No remote or package publication is configured. The package name and distribution coordinates must be rechecked immediately before any future release.
+This is a source-available pre-release at version `0.1.0`. The repository is hosted at [RTPI-ltc/context-ray](https://github.com/RTPI-ltc/context-ray); npm, VS Code Marketplace, and tagged GitHub Action releases are not published yet. Package names, publisher identity, and distribution coordinates must be rechecked before the first tagged release.
 
 ## License
 

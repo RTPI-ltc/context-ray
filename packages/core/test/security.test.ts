@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { analyzeContext } from "../src/index.js";
+import { readTextWithinRoot } from "../src/utils.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -67,5 +68,47 @@ describe("static scan safety", () => {
     const source = report.sources.find((item) => item.path === "AGENTS.md");
     expect(source?.status).toBe("truncated");
     expect(source?.metadata?.loadedBytes).toBe(24);
+  });
+
+  it("uses a bounded file read while retaining the observed on-disk size", async () => {
+    const root = await temporaryRepository();
+    const filePath = path.join(root, "AGENTS.md");
+    await writeFile(filePath, "x".repeat(2_000_000));
+    const file = await readTextWithinRoot(root, filePath, 32);
+    expect(file).toMatchObject({ bytes: 2_000_000, truncated: true });
+    expect(Buffer.byteLength(file?.content ?? "")).toBe(32);
+  });
+
+  it.each([
+    ["codex", ".codex/config.toml", 'project_doc_max_bytes = "unterminated'],
+    ["claude", ".mcp.json", '{"mcpServers":'],
+    ["gemini", ".gemini/settings.json", '{"context":'],
+  ] as const)(
+    "reports malformed %s configuration as evidence-backed",
+    async (agent, relative, content) => {
+      const root = await temporaryRepository();
+      await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+      await writeFile(path.join(root, relative), content);
+      const report = await analyzeContext({ root, agent });
+      const finding = report.findings.find((item) => item.ruleId === "quality/config-parse-error");
+      expect(finding).toMatchObject({
+        severity: "warning",
+        confidence: "high",
+        evidence: [{ path: relative, line: 1 }],
+      });
+      expect(report.sources.find((source) => source.path === relative)?.status).toBe("unavailable");
+    },
+  );
+
+  it("reports malformed rule frontmatter instead of treating it as unscoped", async () => {
+    const root = await temporaryRepository();
+    const relative = ".cursor/rules/broken.mdc";
+    await mkdir(path.dirname(path.join(root, relative)), { recursive: true });
+    await writeFile(path.join(root, relative), "---\nglobs: [\n---\nRule body");
+    const report = await analyzeContext({ root, agent: "cursor" });
+    expect(
+      report.findings.find((item) => item.ruleId === "quality/config-parse-error"),
+    ).toMatchObject({ evidence: [{ path: relative }] });
+    expect(report.sources.find((source) => source.path === relative)?.status).toBe("unavailable");
   });
 });
