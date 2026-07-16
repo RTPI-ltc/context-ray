@@ -18,11 +18,13 @@ jobs:
         node: [20.19.0, 22]
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
-      - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
       - name: Verify tracked Action bundle is current
@@ -33,11 +35,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19.0
           cache: pnpm
-      - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm context-ray scan . --agent codex --target packages/core --format sarif --output .context-ray/report.sarif --fail-on error
       - uses: actions/upload-artifact@v4
