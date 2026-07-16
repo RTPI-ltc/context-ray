@@ -15,7 +15,7 @@
     "@tabler/icons-react": "^3.34.1",
     "@visx/group": "^3.12.0",
     "@visx/responsive": "^3.12.0",
-    "@visx/shape": "^3.12.0",
+    "@visx/shape": "^4.0.0",
     "@vitejs/plugin-react": "5.0.4",
     "vite": "6.4.3",
     "react": "18.3.1",
