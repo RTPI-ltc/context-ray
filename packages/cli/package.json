@@ -34,7 +34,7 @@
     "@context-ray/schema": "workspace:*",
     "@context-ray/server": "workspace:*",
     "commander": "^14.0.0",
-    "open": "^10.1.2"
+    "open": "^11.0.0"
   },
   "devDependencies": {
     "tsup": "^8.5.0",
