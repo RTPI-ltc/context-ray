@@ -11,7 +11,7 @@
   "homepage": "https://github.com/RTPI-ltc/context-ray#readme",
   "bugs": "https://github.com/RTPI-ltc/context-ray/issues",
   "type": "module",
-  "packageManager": "pnpm@11.7.0",
+  "packageManager": "pnpm@10.34.5",
   "engines": {
     "node": ">=20.19"
   },
